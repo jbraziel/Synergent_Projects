@@ -2,10 +2,12 @@ import streamlit as st
 from datetime import date
 from pathlib import Path
 import generate_proposal as gp
+from database import initialize_database, save_proposal, search_proposals, load_proposal
 
 
 st.set_page_config(page_title="Marketing Proposal Generator", layout="wide")
 
+initialize_database()
 
 # -----------------------------
 # CSS
@@ -133,6 +135,68 @@ REQUIRED_SECTIONS = [
 # Helper functions
 # -----------------------------
 
+def collect_saved_data():
+    data = {}
+
+    keys_to_save = [
+        "current_proposal_id",
+        "proposal_status",
+        "proposal_type",
+        "proposal_name",
+        "credit_union",
+        "proposal_date",
+        "conversion_rate",
+        "avg_auto_balance",
+        "auto_interest_rate",
+        "auto_term_years",
+        "custom_targets",
+        "custom_components",
+        "custom_costs",
+        "include_creative",
+        "creative_hours",
+        "include_data_mining",
+        "data_mining_hours",
+        "include_list_procurement",
+        "list_procurement_raw",
+        "include_print",
+        "print_raw",
+        "include_email_labor",
+        "email_hours",
+        "include_email_sends",
+        "email_send_count",
+    ]
+
+    for key in keys_to_save:
+        value = st.session_state.get(key)
+
+        if key == "proposal_date" and value is not None:
+            value = value.isoformat()
+
+        data[key] = value
+
+    for i, _ in enumerate(DEFAULT_TARGET_OPTIONS, start=1):
+        data[f"target_include_saved_{i}"] = st.session_state.get(f"target_include_saved_{i}", i <= 5)
+        data[f"target_count_saved_{i}"] = st.session_state.get(f"target_count_saved_{i}", DEFAULT_TARGET_OPTIONS[i - 1][0])
+
+    for i, _ in enumerate(DEFAULT_COMPONENTS, start=1):
+        data[f"component_saved_{i}"] = st.session_state.get(f"component_saved_{i}", True)
+
+    for name in STRAIGHT_COST_ITEMS:
+        data[f"cost_{name}"] = st.session_state.get(f"cost_{name}", True)
+
+    for sec in REQUIRED_SECTIONS:
+        data[f"complete_{sec}"] = st.session_state.get(f"complete_{sec}", False)
+
+    return data
+
+
+def load_saved_data(data):
+    for key, value in data.items():
+        if key == "proposal_date" and value:
+            value = date.fromisoformat(value)
+
+        st.session_state[key] = value
+
 def section_complete_checkbox(section_name):
     saved_key = f"complete_{section_name}"
     widget_key = f"widget_{saved_key}"
@@ -259,7 +323,7 @@ def persistent_checkbox(label, saved_key, default=True):
 
 def init_state():
     defaults = {
-        "active_section": "Proposal Details",
+        "active_section": "Proposal Library",
         "proposal_type": "Auto Loan Recapture Campaign",
         "proposal_name": "ACH Auto Loan Recapture Campaign Proposal",
         "credit_union": "Sample Credit Union",
@@ -288,6 +352,8 @@ def init_state():
         "complete_Conversion Metrics": False,
         "complete_Campaign Components": False,
         "complete_Cost Estimator": False,
+        "current_proposal_id": None,
+        "proposal_status": "Draft",
     }
 
     for key, value in defaults.items():
@@ -460,6 +526,7 @@ st.sidebar.image("logo.png", width=150)
 st.sidebar.markdown("### Sections")
 
 SECTIONS = [
+    "Proposal Library",
     "Proposal Details",
     "Campaign Targets",
     "Conversion Metrics",
@@ -559,11 +626,67 @@ estimated_first_year_interest = calculate_first_year_interest(
 
 costs = calculate_costs()
 
+# ============================================================
+# Proposal Library
+# ============================================================
+
+if section == "Proposal Library":
+    st.subheader("Proposal Library")
+
+    col1, col2 = st.columns([0.65, 0.35])
+
+    with col1:
+        search_text = st.text_input("Search by proposal name, credit union, or proposal type")
+
+    with col2:
+        status_filter = st.selectbox(
+            "Status",
+            ["All", "Draft", "Complete", "Archived"]
+        )
+
+    results = search_proposals(search_text, status_filter)
+
+    if not results:
+        st.info("No saved proposals found.")
+    else:
+        for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at in results:
+            with st.container():
+                st.markdown(f"### {proposal_name}")
+                st.write(f"Credit Union: {credit_union}")
+                st.write(f"Type: {proposal_type}")
+                st.write(f"Status: {status}")
+                st.caption(f"Last updated: {updated_at}")
+
+                col_open, col_complete = st.columns([0.25, 0.75])
+
+                with col_open:
+                    if st.button("Open", key=f"open_{proposal_id}"):
+                        saved_data = load_proposal(proposal_id)
+
+                        if saved_data:
+                            load_saved_data(saved_data)
+                            st.session_state.current_proposal_id = proposal_id
+                            st.session_state.active_section = "Proposal Details"
+                            st.rerun()
+
+                st.markdown("---")
+
+    st.markdown("### Start New Proposal")
+
+    if st.button("Create New Proposal"):
+        st.session_state.current_proposal_id = None
+        st.session_state.proposal_status = "Draft"
+
+        for sec in REQUIRED_SECTIONS:
+            st.session_state[f"complete_{sec}"] = False
+
+        st.session_state.active_section = "Proposal Details"
+        st.rerun()
 
 # ============================================================
 # Proposal Details
 # ============================================================
-if section == "Proposal Details":
+elif section == "Proposal Details":
     st.subheader("Proposal Details")
 
     st.session_state.proposal_type = st.selectbox(
@@ -1052,8 +1175,8 @@ elif section == "Generate Proposal":
     # Section Completion Check
     # -----------------------------
     # -----------------------------
-# Completion check
-# -----------------------------
+   # Completion check
+   # -----------------------------
 incomplete_sections = [
     sec for sec in REQUIRED_SECTIONS
     if not st.session_state.get(f"complete_{sec}", False)
@@ -1099,8 +1222,53 @@ else:
     st.write(f"Proposal Type: {st.session_state.proposal_type}")
     st.write(f"Credit Union: {st.session_state.credit_union}")
     st.write(f"Total Targets: {total_targets:,}")
-    st.write(f"One Campaign Cost: {campaign_1_cost}")
+    st.write(f"One Campaign Cost: {money(costs['campaign_1_calc'])}")
 
+    # -----------------------------
+    # Save Proposal
+    # -----------------------------
+    st.markdown("### Save Proposal")
+
+    st.session_state.proposal_status = st.selectbox(
+    "Proposal Status",
+    ["Draft", "Complete", "Archived"],
+    index=["Draft", "Complete", "Archived"].index(st.session_state.get("proposal_status", "Draft"))
+)
+
+col_save, col_save_complete = st.columns(2)
+
+with col_save:
+    if st.button("Save Proposal"):
+        saved_data = collect_saved_data()
+
+        proposal_id = save_proposal(
+            st.session_state.get("current_proposal_id"),
+            st.session_state.proposal_name,
+            st.session_state.credit_union,
+            st.session_state.proposal_type,
+            st.session_state.proposal_status,
+            saved_data
+        )
+
+        st.session_state.current_proposal_id = proposal_id
+        st.success("Proposal saved.")
+
+with col_save_complete:
+    if st.button("Save as Complete"):
+        st.session_state.proposal_status = "Complete"
+        saved_data = collect_saved_data()
+
+        proposal_id = save_proposal(
+            st.session_state.get("current_proposal_id"),
+            st.session_state.proposal_name,
+            st.session_state.credit_union,
+            st.session_state.proposal_type,
+            "Complete",
+            saved_data
+        )
+
+        st.session_state.current_proposal_id = proposal_id
+        st.success("Proposal saved as complete.")
 
     # -----------------------------
     # Run Generation
