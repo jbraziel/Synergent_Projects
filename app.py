@@ -2,8 +2,9 @@ import streamlit as st
 from datetime import date
 from pathlib import Path
 import generate_proposal as gp
-from database import initialize_database, save_proposal, search_proposals, load_proposal
-
+from database import initialize_database, save_proposal, search_proposals, load_proposal, delete_proposal, update_proposal_status
+import os
+import json
 
 st.set_page_config(page_title="Marketing Proposal Generator", layout="wide")
 
@@ -14,56 +15,141 @@ initialize_database()
 # -----------------------------
 st.markdown(
     """
-    <style>
-        html, body, [class*="css"] {
-            font-family: 'Montserrat', sans-serif;
-        }
-
-        .stApp {
-            background-color: #f7f9f5;
-        }
-
-        h1, h2, h3 {
-            color: #2f3a2f;
-        }
-
-        .stButton > button {
-            background-color: #76bd22;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 0.6rem 1.2rem;
-            font-weight: 700;
-        }
-
-        .stButton > button:hover {
-            background-color: #5f9f1b;
-            color: white;
-        }
-
-        section[data-testid="stSidebar"] {
-            background-color: #eef6e8;
-        }
-
-        section[data-testid="stSidebar"] button {
-           background-color: white;
-           color: #2f3a2f;
-           border: 1px solid #d5e6cc;
-           border-radius: 10px;
-           padding: 0.75rem 1rem;
-           margin-bottom: 0.35rem;
-           font-weight: 600;
-        }
-
-        section[data-testid="stSidebar"] button:hover {
-           background-color: #e8f4df;
-           border-color: #76bd22;
-        }
-
-        div[data-testid="stHorizontalBlock"] {
-            gap: 0.25rem !important;
-        }
-    </style>
+<style>
+    html, body, [class*="css"] {
+        font-family: 'Montserrat', sans-serif;
+    }
+    
+    .stApp {
+        background-color: #f7f9f5;
+    }
+    
+    h1, h2, h3 {
+        color: #2f3a2f;
+    }
+    
+    section[data-testid="stSidebar"] {
+        background-color: #eef6e8;
+    }
+    
+    section[data-testid="stSidebar"] button {
+       background-color: white !important;
+       color: #2f3a2f !important;
+       border: 1px solid #d5e6cc !important;
+       border-radius: 10px !important;
+       padding: 0.75rem 1rem !important;
+       margin-bottom: 0.35rem !important;
+       font-weight: 600 !important;
+    }
+    
+    section[data-testid="stSidebar"] button:hover {
+       background-color: #e8f4df !important;
+       border-color: #76bd22 !important;
+    }
+    
+    div[data-testid="stHorizontalBlock"] {
+        gap: 0.25rem !important;
+    }
+    
+    .proposal-table-header {
+        background-color: #eef6e8;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+    
+    .proposal-row {
+        background-color: white;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid #e3e8df;
+        margin-bottom: 6px;
+    }
+    
+    .proposal-row:hover {
+       background-color: #f0f8ea;
+       border-color: #76bd22;
+    }
+    
+    strong {
+        font-size: 13px;
+    }
+    
+    hr {
+        border: none;
+        border-top: 1px solid #e5e5e5;
+    }
+    
+    div[data-testid="stSelectbox"] > div {
+        min-width: 90px !important;
+    }
+    
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+        font-size: 12px !important;
+    }
+    
+    /* Button layout */
+    div[data-testid="stButton"] {
+        margin: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        height: 100% !important;
+    }
+    
+    div[data-testid="stButton"] button,
+    div[data-testid="stDownloadButton"] button {
+        height: 38px !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 12px !important;
+        border: none !important;
+    }
+    
+    /* Normal buttons: OPEN and cycle */
+    div[data-testid="stButton"] button[kind="secondary"] {
+        background-color: #76bd22 !important;
+        color: white !important;
+    }
+    
+    div[data-testid="stButton"] button[kind="secondary"]:hover {
+        background-color: #5f9f1b !important;
+        color: white !important;
+    }
+    
+    /* Delete button */
+    div[data-testid="stButton"] button[kind="primary"] {
+        background-color: #c0392b !important;
+        color: white !important;
+    }
+    
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #a93226 !important;
+        color: white !important;
+    }
+    
+    /* Download button */
+    div[data-testid="stDownloadButton"] button {
+        background-color: #1f77d0 !important;
+        color: white !important;
+    }
+    
+    div[data-testid="stDownloadButton"] button:hover {
+        background-color: #155a9c !important;
+        color: white !important;
+    }
+    
+    /* Small icon-style buttons */
+    button[kind="secondary"],
+    button[kind="primary"],
+    div[data-testid="stDownloadButton"] button {
+        min-width: 28px !important;
+        padding: 0.15rem 0.35rem !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+</style>
     """,
     unsafe_allow_html=True,
 )
@@ -135,6 +221,25 @@ REQUIRED_SECTIONS = [
 # Helper functions
 # -----------------------------
 
+def auto_save_proposal():
+    # Only auto-save after a proposal has been created/saved once
+    if not st.session_state.get("current_proposal_id"):
+        return
+
+    saved_data = collect_saved_data()
+
+    proposal_id = save_proposal(
+        st.session_state.get("current_proposal_id"),
+        st.session_state.proposal_name,
+        st.session_state.credit_union,
+        st.session_state.proposal_type,
+        st.session_state.proposal_status,
+        saved_data,
+        st.session_state.msr
+    )
+
+    st.session_state.current_proposal_id = proposal_id
+
 def collect_saved_data():
     data = {}
 
@@ -164,6 +269,8 @@ def collect_saved_data():
         "email_hours",
         "include_email_sends",
         "email_send_count",
+        "msr",
+        "file_path"
     ]
 
     for key in keys_to_save:
@@ -354,6 +461,7 @@ def init_state():
         "complete_Cost Estimator": False,
         "current_proposal_id": None,
         "proposal_status": "Draft",
+        "msr": "Shannan"
     }
 
     for key, value in defaults.items():
@@ -409,6 +517,25 @@ def get_selected_components():
             selected_components.append(component.strip())
 
     return selected_components
+
+def format_status(status):
+    colors = {
+        "Draft": "#6c757d",        # gray
+        "CU Review": "#3555bd",    # blue
+        "Signed": "#76bd22",       # green
+        "Declined": "#dc3545"      # red
+    }
+    color = colors.get(status, "black")
+    return f"<span style='color:{color}; font-weight:600'>{status}</span>"
+
+def status_color(status):
+    colors = {
+        "Draft": "#6c757d",
+        "CU Review": "#3555bd",
+        "Signed": "#76bd22",
+        "Declined": "#dc3545"
+    }
+    return colors.get(status, "black")
 
 
 def calculate_costs():
@@ -522,43 +649,49 @@ init_state()
 # -----------------------------
 # Sidebar
 # -----------------------------
-st.sidebar.image("logo.png", width=150)
-st.sidebar.markdown("### Sections")
+with st.sidebar:
+    st.image("logo.png", width=150)
 
-SECTIONS = [
-    "Proposal Library",
-    "Proposal Details",
-    "Campaign Targets",
-    "Conversion Metrics",
-    "Campaign Components",
-    "Cost Estimator",
-    "Generate Proposal",
-]
+    if st.button("📁 Proposal Library", key="nav_library", use_container_width=True):
+        st.session_state.active_section = "Proposal Library"
+        st.rerun()
 
-for sec in SECTIONS:
-    selected = st.session_state.active_section == sec
+    if st.session_state.active_section != "Proposal Library":
+        st.markdown("### Proposal Workflow")
 
-    if sec == "Generate Proposal":
-        icon = "🚀"
-    else:
-        icon = "✅" if st.session_state.get(f"complete_{sec}", False) else "⬜"
+        workflow_sections = [
+            "Proposal Details",
+            "Campaign Targets",
+            "Conversion Metrics",
+            "Campaign Components",
+            "Cost Estimator",
+            "Generate Proposal",
 
-    col_icon, col_button = st.sidebar.columns([0.18, 0.82])
+        ]
 
-    with col_icon:
-        st.markdown(
-            f"<div style='font-size:20px; padding-top:8px; text-align:center;'>{icon}</div>",
-            unsafe_allow_html=True
-        )
+        for sec in workflow_sections:
+            selected = st.session_state.active_section == sec
 
-    with col_button:
-        label = f"▶ {sec}" if selected else sec
+            if sec == "Generate Proposal":
+                icon = "🚀"
+            else:
+                icon = "✅" if st.session_state.get(f"complete_{sec}", False) else "⬜"
 
-        if st.button(label, key=f"nav_{sec}", use_container_width=True):
-            st.session_state.active_section = sec
+            col_icon, col_button = st.columns([0.18, 0.82])
 
+            with col_icon:
+                st.markdown(
+                    f"<div style='font-size:20px; padding-top:8px; text-align:center;'>{icon}</div>",
+                    unsafe_allow_html=True
+                )
+
+            with col_button:
+                label = f"▶ {sec}" if selected else sec
+
+                if st.button(label, key=f"nav_{sec}", use_container_width=True):
+                    st.session_state.active_section = sec
+                    
 section = st.session_state.active_section
-
 
 # -----------------------------
 # Header
@@ -598,13 +731,6 @@ completed_sections = [
     if st.session_state.get(f"complete_{sec}", False)
 ]
 
-progress = len(completed_sections) / len(REQUIRED_SECTIONS)
-
-st.progress(progress)
-
-st.caption(
-    f"{len(completed_sections)} of {len(REQUIRED_SECTIONS)} required sections complete"
-)
 
 
 # -----------------------------
@@ -629,11 +755,10 @@ costs = calculate_costs()
 # ============================================================
 # Proposal Library
 # ============================================================
-
 if section == "Proposal Library":
     st.subheader("Proposal Library")
 
-    col1, col2 = st.columns([0.65, 0.35])
+    col1, col2, col3 = st.columns([0.50, 0.25, 0.25])
 
     with col1:
         search_text = st.text_input("Search by proposal name, credit union, or proposal type")
@@ -641,47 +766,163 @@ if section == "Proposal Library":
     with col2:
         status_filter = st.selectbox(
             "Status",
-            ["All", "Draft", "Complete", "Archived"]
+            ["All", "Draft", "CU Review", "Signed", "Declined"]
         )
 
-    results = search_proposals(search_text, status_filter)
+    with col3:
+        msr_filter = st.selectbox(
+            "MSR",
+            ["All", "Shannan", "Erica"]
+        )
 
-    if not results:
-        st.info("No saved proposals found.")
-    else:
-        for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at in results:
-            with st.container():
-                st.markdown(f"### {proposal_name}")
-                st.write(f"Credit Union: {credit_union}")
-                st.write(f"Type: {proposal_type}")
-                st.write(f"Status: {status}")
-                st.caption(f"Last updated: {updated_at}")
-
-                col_open, col_complete = st.columns([0.25, 0.75])
-
-                with col_open:
-                    if st.button("Open", key=f"open_{proposal_id}"):
-                        saved_data = load_proposal(proposal_id)
-
-                        if saved_data:
-                            load_saved_data(saved_data)
-                            st.session_state.current_proposal_id = proposal_id
-                            st.session_state.active_section = "Proposal Details"
-                            st.rerun()
-
-                st.markdown("---")
+    results = search_proposals(search_text, status_filter, msr_filter)
 
     st.markdown("### Start New Proposal")
 
-    if st.button("Create New Proposal"):
+    if st.button("Create New Proposal", key="create_new_proposal"):
         st.session_state.current_proposal_id = None
         st.session_state.proposal_status = "Draft"
 
         for sec in REQUIRED_SECTIONS:
             st.session_state[f"complete_{sec}"] = False
+            st.session_state[f"widget_complete_{sec}"] = False
 
         st.session_state.active_section = "Proposal Details"
         st.rerun()
+
+    st.markdown("---")
+
+    if not results:
+        st.info("No saved proposals found.")
+    else:
+        st.markdown("### Saved Proposals")
+
+        h1, h2, h3, h4, h5, h6, h7, h8 = st.columns(
+           [0.20, 0.15, 0.10, 0.10, 0.14, 0.05, 0.04, 0.03]
+        )
+
+        with h1: st.markdown("<span style='font-size:15px; font-weight:700;'>Proposal</span>", unsafe_allow_html=True)
+        with h2: st.markdown("<span style='font-size:15px; font-weight:700;'>Credit Union</span>", unsafe_allow_html=True)
+        with h3: st.markdown("<span style='font-size:15px; font-weight:700;'>Status</span>", unsafe_allow_html=True)
+        with h4: st.markdown("<span style='font-size:15px; font-weight:700;'>MSR</span>", unsafe_allow_html=True)
+        with h5: st.markdown("<span style='font-size:15px; font-weight:700;'>Last Updated</span>", unsafe_allow_html=True)
+        with h6: st.markdown("<span style='font-size:15px; font-weight:700;'>Actions</span>", unsafe_allow_html=True)
+        with h7: st.markdown("<span style='font-size:15px; font-weight:700;'></span>", unsafe_allow_html=True)
+        with h8: st.markdown("<span style='font-size:15px; font-weight:700;'></span>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+
+        for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr in results:
+            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
+                [0.20, 0.15, 0.10, 0.10, 0.14, 0.05, 0.04, 0.03]
+            )
+
+            with col1:
+                st.write(f"**{proposal_name}**")
+
+            with col2:
+                st.write(credit_union)
+
+            with col3:
+                 status_options = ["Draft", "CU Review", "Signed", "Declined"]
+             
+                 status_colors = {
+                     "Draft": "#f0ad4e",
+                     "CU Review": "#3555bd",
+                     "Signed": "#76bd22",
+                     "Declined": "#dc3545",
+                 }
+             
+                 if status not in status_options:
+                     status = "Draft"
+             
+                 next_status = status_options[
+                     (status_options.index(status) + 1) % len(status_options)
+                 ]
+             
+                 pill_col, button_col = st.columns([0.60, 0.40])
+             
+                 with pill_col:
+                     st.markdown(
+                         f"""
+                         <div style="
+                             background-color:{status_colors[status]};
+                             color:white;
+                             border-radius:20px;
+                             padding:4px 10px;
+                             font-size:15px;
+                             font-weight:700;
+                             text-align:center;
+                             width:90px;
+                             line-height:18px;
+                             margin-top:4px;
+                         ">
+                             {status}
+                         </div>
+                         """,
+                         unsafe_allow_html=True
+                     )
+             
+                 with button_col:
+                     if st.button(
+                         "↻",
+                         key=f"cycle_status_{proposal_id}",
+                         help=f"Change status to {next_status}"
+                     ):
+                         update_proposal_status(proposal_id, next_status)
+                         st.rerun()
+
+            with col4:
+                st.write(msr or "")
+
+            with col5:
+                st.caption(f"Last updated: {updated_at}")
+
+            with col6:
+                if st.button("OPEN", key=f"open_{proposal_id}", type="secondary", help="Continue editing proposal"):
+                    saved_data = load_proposal(proposal_id)
+
+                    if saved_data:
+                        load_saved_data(saved_data)
+                        st.session_state.current_proposal_id = proposal_id
+                        st.session_state.active_section = "Proposal Details"
+                        st.rerun()
+
+            with col7:
+                if st.button(
+                    "✕",
+                    key=f"delete_{proposal_id}",
+                    type="primary",
+                    help="Delete this Proposal"
+                ):
+                    delete_proposal(proposal_id)
+                    st.rerun()
+
+            with col8:
+                saved_data = load_proposal(proposal_id)
+
+                # If saved_data is stored as JSON text, convert it back to a dictionary
+                if isinstance(saved_data, str):
+                    import json
+                    saved_data = json.loads(saved_data)
+            
+                file_path = saved_data.get("file_path") if saved_data else None
+
+
+                if file_path and os.path.exists(file_path):
+                    with open(file_path, "rb") as file:
+                       st.download_button(
+                          label="↓",
+                          data=file,
+                          file_name=os.path.basename(file_path),
+                          mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                          key=f"download_docx_{proposal_id}",
+                          help="Download proposal"
+                        )
+                else:
+                     st.caption("No file")
+
+            st.markdown("<hr style='margin: 4px 0;'>", unsafe_allow_html=True)
 
 # ============================================================
 # Proposal Details
@@ -718,9 +959,14 @@ elif section == "Proposal Details":
             "Proposal Date",
             st.session_state.proposal_date,
         )
+        st.session_state.msr = st.selectbox(
+            "MSR",
+            ["Shannan", "Erica"],
+            index=["Shannan", "Erica"].index(st.session_state.get("msr", "Shannan"))
+        )
 
     section_complete_checkbox("Proposal Details")
-
+    auto_save_proposal()
 
 # ============================================================
 # Campaign Targets
@@ -798,7 +1044,7 @@ elif section == "Campaign Targets":
     st.success(f"Total selected targets: {total_targets:,}")
 
     section_complete_checkbox("Campaign Targets")
-
+    auto_save_proposal()
    
 
 # ============================================================
@@ -883,7 +1129,7 @@ elif section == "Conversion Metrics":
     )
 
     section_complete_checkbox("Conversion Metrics")
-
+    auto_save_proposal()
 
 # ============================================================
 # Campaign Components
@@ -912,7 +1158,7 @@ elif section == "Campaign Components":
             f"Custom Component {i + 1}",
             value=component,
             key=f"custom_component_input_{i}",
-            placeholder="Example: custom landing page analytics dashboard",
+            placeholder="Example: custom landing page development",
         )
 
         updated_components.append(updated_value)
@@ -922,6 +1168,7 @@ elif section == "Campaign Components":
     st.success(f"Selected components: {len(get_selected_components())}")
 
     section_complete_checkbox("Campaign Components")
+    auto_save_proposal()
 
 # ============================================================
 # Cost Estimator
@@ -1125,6 +1372,7 @@ elif section == "Cost Estimator":
         )
 
     section_complete_checkbox("Cost Estimator")  
+    auto_save_proposal()
 
 
 # ============================================================
@@ -1172,48 +1420,41 @@ elif section == "Generate Proposal":
     )
 
     # -----------------------------
-    # Section Completion Check
+    # Completion check
     # -----------------------------
-    # -----------------------------
-   # Completion check
-   # -----------------------------
-incomplete_sections = [
-    sec for sec in REQUIRED_SECTIONS
-    if not st.session_state.get(f"complete_{sec}", False)
-]
+    incomplete_sections = [
+        sec for sec in REQUIRED_SECTIONS
+        if not st.session_state.get(f"complete_{sec}", False)
+    ]
 
-# Always create this variable
-generate_clicked = False
+    generate_clicked = False
 
-if incomplete_sections:
-    st.warning(
-        "Complete all sections before generating the proposal:\n\n- "
-        + "\n- ".join(incomplete_sections)
-    )
+    if incomplete_sections:
+        st.warning(
+            "Complete all sections before generating the proposal:\n\n- "
+            + "\n- ".join(incomplete_sections)
+        )
 
-    st.markdown("### Go to Missing Section")
+        st.markdown("### Go to Missing Section")
 
-    for missing_section in incomplete_sections:
-        if st.button(
-            f"Go to {missing_section}",
-            key=f"go_to_{missing_section}"
-        ):
-            st.session_state.active_section = missing_section
-            st.rerun()
+        for missing_section in incomplete_sections:
+            if st.button(
+                f"Go to {missing_section}",
+                key=f"go_to_{missing_section}"
+            ):
+                st.session_state.active_section = missing_section
+                st.rerun()
 
-    st.button(
-        "Generate Proposal",
-        disabled=True
-    )
+        st.button("Generate Proposal", disabled=True)
 
-else:
-    st.success("All required sections are complete. You can generate the proposal.")
+    else:
+        st.success("All required sections are complete. You can generate the proposal.")
 
-    generate_clicked = st.button(
-        "Generate Proposal",
-        key="generate_proposal_enabled",
-        disabled=False
-    )
+        generate_clicked = st.button(
+            "Generate Proposal",
+            key="generate_proposal_enabled",
+            disabled=False
+        )
 
     # -----------------------------
     # Summary Display
@@ -1230,45 +1471,49 @@ else:
     st.markdown("### Save Proposal")
 
     st.session_state.proposal_status = st.selectbox(
-    "Proposal Status",
-    ["Draft", "Complete", "Archived"],
-    index=["Draft", "Complete", "Archived"].index(st.session_state.get("proposal_status", "Draft"))
-)
-
-col_save, col_save_complete = st.columns(2)
-
-with col_save:
-    if st.button("Save Proposal"):
-        saved_data = collect_saved_data()
-
-        proposal_id = save_proposal(
-            st.session_state.get("current_proposal_id"),
-            st.session_state.proposal_name,
-            st.session_state.credit_union,
-            st.session_state.proposal_type,
-            st.session_state.proposal_status,
-            saved_data
+        "Proposal Status",
+        ["Draft", "CU Review", "Signed", "Declined"],
+        index=["Draft", "CU Review", "Signed", "Declined"].index(
+            st.session_state.get("proposal_status", "Draft")
         )
+    )
 
-        st.session_state.current_proposal_id = proposal_id
-        st.success("Proposal saved.")
+    col_save, col_save_complete = st.columns(2)
 
-with col_save_complete:
-    if st.button("Save as Complete"):
-        st.session_state.proposal_status = "Complete"
-        saved_data = collect_saved_data()
+    with col_save:
+        if st.button("Save Proposal"):
+            saved_data = collect_saved_data()
 
-        proposal_id = save_proposal(
-            st.session_state.get("current_proposal_id"),
-            st.session_state.proposal_name,
-            st.session_state.credit_union,
-            st.session_state.proposal_type,
-            "Complete",
-            saved_data
-        )
+            proposal_id = save_proposal(
+               st.session_state.get("current_proposal_id"),
+               st.session_state.proposal_name,
+               st.session_state.credit_union,
+               st.session_state.proposal_type,
+               st.session_state.proposal_status,
+               saved_data,
+               st.session_state.msr
+            )
 
-        st.session_state.current_proposal_id = proposal_id
-        st.success("Proposal saved as complete.")
+            st.session_state.current_proposal_id = proposal_id
+            st.success("Proposal saved.")
+
+    with col_save_complete:
+        if st.button("Save as Complete"):
+            st.session_state.proposal_status = "Complete"
+            saved_data = collect_saved_data()
+
+            proposal_id = save_proposal(
+               st.session_state.get("current_proposal_id"),
+               st.session_state.proposal_name,
+               st.session_state.credit_union,
+               st.session_state.proposal_type,
+               st.session_state.proposal_status,
+               saved_data,
+               st.session_state.msr
+            )              
+
+            st.session_state.current_proposal_id = proposal_id
+            st.success("Proposal saved as complete.")
 
     # -----------------------------
     # Run Generation
@@ -1314,14 +1559,56 @@ with col_save_complete:
             gp.campaign_components.clear()
             gp.campaign_components.extend(selected_components)
 
-            gp.main()
+            import os
+            from datetime import datetime
+            
+            date_str = datetime.today().strftime("%Y%m%d")
+            
+            credit_union_clean = st.session_state.credit_union
+            proposal_name_clean = st.session_state.proposal_name
+            
+            file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.docx"
+            
+            os.makedirs("generated_proposals", exist_ok=True)
+            
+            file_path = os.path.join("generated_proposals", file_name)
+            
+            gp.main(output_path=file_path)
+
+
+            saved_data = collect_saved_data()
+            saved_data["file_path"] = file_path
+            st.session_state.file_path = file_path
+
+            
+            proposal_id = save_proposal(
+                st.session_state.get("current_proposal_id"),
+                st.session_state.proposal_name,
+                st.session_state.credit_union,
+                st.session_state.proposal_type,
+                st.session_state.proposal_status,
+                saved_data,
+                st.session_state.msr
+            )
+
+            st.session_state.current_proposal_id = proposal_id
 
             st.success("Proposal generated successfully!")
 
-            with open("Generated_ACH_Auto_Proposal.docx", "rb") as file:
+            with open(file_path, "rb") as file:
+
+                from datetime import datetime
+
+                date_str = datetime.today().strftime("%Y%m%d")
+                
+                credit_union_clean = st.session_state.credit_union.replace(" ", " ")
+                proposal_name_clean = st.session_state.proposal_name.replace(" ", " ")
+                
+                file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.docx"
+
                 st.download_button(
                     label="Download Generated Proposal",
                     data=file,
-                    file_name="Generated_ACH_Auto_Proposal.docx",
+                    file_name=file_name,
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 )
