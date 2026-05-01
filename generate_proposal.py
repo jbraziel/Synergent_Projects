@@ -436,7 +436,7 @@ def find_unreplaced_placeholders(doc):
     return sorted(set(re.findall(r"\{\{[\s\S]*?\}\}", joined_text)))
 
 
-def main():
+def main(output_path=None):
     doc = Document(TEMPLATE_PATH)
 
     proposal_data["{{target_segment_summary}}"] = "\n".join(
@@ -492,9 +492,12 @@ def main():
 
     remaining = find_unreplaced_placeholders(doc)
 
-    doc.save(OUTPUT_PATH)
+    if output_path is None:
+        output_path = OUTPUT_PATH
 
-    print(f"Proposal created successfully: {OUTPUT_PATH}")
+    doc.save(output_path)
+
+    print(f"Proposal created successfully: {output_path}")
 
     if remaining:
         print("\nThese placeholders are still unreplaced:")
