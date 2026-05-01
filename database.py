@@ -2,6 +2,8 @@ import sqlite3
 import json
 from datetime import datetime
 from pathlib import Path
+import time
+
 
 DB_NAME = Path(__file__).parent / "proposals.db"
 
@@ -27,72 +29,101 @@ def initialize_database():
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            saved_data_json TEXT NOT NULL
+            saved_data_json TEXT NOT NULL,
+            updated_by TEXT,
+            locked_by TEXT,
+            locked_at TEXT
         )
     """)
-
+    add_column_if_missing(cursor, "proposals", "updated_by", "TEXT")
+    add_column_if_missing(cursor, "proposals", "locked_by", "TEXT")
+    add_column_if_missing(cursor, "proposals", "locked_at", "TEXT")
     conn.commit()
     conn.close()
 
+def add_column_if_missing(cursor, table, column, definition):
+    cursor.execute(f"PRAGMA table_info({table})")
+    columns = [row[1] for row in cursor.fetchall()]
 
-def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, status, saved_data, msr=""):
-    conn = get_connection()
-    cursor = conn.cursor()
+    if column not in columns:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, status, saved_data, msr="", updated_by=""):
+    import time
+    import sqlite3
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     saved_json = json.dumps(saved_data)
 
-    if proposal_id:
-        cursor.execute("""
-            UPDATE proposals
-            SET proposal_name = ?,
-                credit_union = ?,
-                proposal_type = ?,
-                msr = ?,
-                status = ?,
-                updated_at = ?,
-                saved_data_json = ?
-            WHERE id = ?
-        """, (
-            proposal_name,
-            credit_union,
-            proposal_type,
-            msr,
-            status,
-            now,
-            saved_json,
-            proposal_id
-        ))
-    else:
-        cursor.execute("""
-            INSERT INTO proposals (
-                proposal_name,
-                credit_union,
-                proposal_type,
-                msr,
-                status,
-                created_at,
-                updated_at,
-                saved_data_json
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            proposal_name,
-            credit_union,
-            proposal_type,
-            msr,
-            status,
-            now,
-            now,
-            saved_json
-        ))
+    for attempt in range(5):
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        proposal_id = cursor.lastrowid
+        try:
+            if proposal_id:
+                cursor.execute("""
+                    UPDATE proposals
+                    SET proposal_name = ?,
+                        credit_union = ?,
+                        proposal_type = ?,
+                        msr = ?,
+                        status = ?,
+                        updated_at = ?,
+                        saved_data_json = ?,
+                        updated_by = ?
+                    WHERE id = ?
+                """, (
+                    proposal_name,
+                    credit_union,
+                    proposal_type,
+                    msr,
+                    status,
+                    now,
+                    saved_json,
+                    updated_by,
+                    proposal_id
+                ))
+            else:
+                cursor.execute("""
+                    INSERT INTO proposals (
+                        proposal_name,
+                        credit_union,
+                        proposal_type,
+                        msr,
+                        status,
+                        created_at,
+                        updated_at,
+                        saved_data_json,
+                        updated_by
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    proposal_name,
+                    credit_union,
+                    proposal_type,
+                    msr,
+                    status,
+                    now,
+                    now,
+                    saved_json,
+                    updated_by
+                ))
 
-    conn.commit()
-    conn.close()
+                proposal_id = cursor.lastrowid
 
-    return proposal_id
+            conn.commit()
+            conn.close()
+            return proposal_id
+
+        except sqlite3.OperationalError as e:
+            conn.close()
+
+            if "locked" in str(e).lower() and attempt < 4:
+                time.sleep(0.5)
+                continue
+
+            raise
 
 
 def search_proposals(search_text="", status_filter="All", msr_filter="All"):
@@ -100,7 +131,7 @@ def search_proposals(search_text="", status_filter="All", msr_filter="All"):
     cursor = conn.cursor()
 
     query = """
-        SELECT id, proposal_name, credit_union, proposal_type, status, updated_at, msr
+        SELECT id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at
         FROM proposals
         WHERE 1=1
     """
@@ -182,6 +213,38 @@ def update_proposal_status(proposal_id, status):
             updated_at = ?
         WHERE id = ?
     """, (status, now, proposal_id))
+
+    conn.commit()
+    conn.close()
+
+def lock_proposal(proposal_id, user_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        UPDATE proposals
+        SET locked_by = ?,
+            locked_at = ?
+        WHERE id = ?
+    """, (user_name, now, proposal_id))
+
+    conn.commit()
+    conn.close()
+
+
+def unlock_proposal(proposal_id, user_name):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE proposals
+        SET locked_by = NULL,
+            locked_at = NULL
+        WHERE id = ?
+          AND locked_by = ?
+    """, (proposal_id, user_name))
 
     conn.commit()
     conn.close()
