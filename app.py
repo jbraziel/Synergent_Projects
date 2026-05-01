@@ -2,7 +2,7 @@ import streamlit as st
 from datetime import date
 from pathlib import Path
 import generate_proposal as gp
-from database import initialize_database, save_proposal, search_proposals, load_proposal, delete_proposal, update_proposal_status
+from database import initialize_database, save_proposal, search_proposals, load_proposal, delete_proposal, update_proposal_status, lock_proposal, unlock_proposal
 import os
 import json
 
@@ -235,7 +235,8 @@ def auto_save_proposal():
         st.session_state.proposal_type,
         st.session_state.proposal_status,
         saved_data,
-        st.session_state.msr
+        st.session_state.msr,
+        st.session_state.current_user
     )
 
     st.session_state.current_proposal_id = proposal_id
@@ -461,7 +462,8 @@ def init_state():
         "complete_Cost Estimator": False,
         "current_proposal_id": None,
         "proposal_status": "Draft",
-        "msr": "Shannan"
+        "msr": "",
+        "current_user": ""
     }
 
     for key, value in defaults.items():
@@ -652,6 +654,46 @@ init_state()
 with st.sidebar:
     st.image("logo.png", width=150)
 
+    # Initialize if not set
+    if "current_user" not in st.session_state:
+        st.session_state.current_user = ""
+    
+    user = st.selectbox(
+        "Who is using the proposal tool?",
+        ["", "Jen", "Erica", "Shannan", "Doug"],
+        index=["", "Jen", "Erica", "Shannan", "Doug"].index(st.session_state.current_user)
+        if st.session_state.current_user in ["", "Jen", "Erica", "Shannan", "Doug"]
+        else 0
+    )
+
+    st.session_state.current_user = user
+    
+    # Stop app until user is selected
+    if not st.session_state.current_user:
+        st.warning("Please select your name to continue")
+        st.stop()
+
+    st.caption(f"Editing: {st.session_state.proposal_name}")
+
+    st.markdown("---")
+
+    if st.session_state.get("current_proposal_id"):
+       st.markdown("### Current Proposal")
+
+       st.caption(st.session_state.get("proposal_name", ""))
+
+    if st.button("Close Proposal"):
+        unlock_proposal(
+            st.session_state.current_proposal_id,
+            st.session_state.current_user
+        )
+
+        st.session_state.current_proposal_id = None
+        st.session_state.active_section = "Proposal Library"
+        st.rerun()
+
+    st.markdown("---")
+
     if st.button("📁 Proposal Library", key="nav_library", use_container_width=True):
         st.session_state.active_section = "Proposal Library"
         st.rerun()
@@ -812,13 +854,16 @@ if section == "Proposal Library":
         
         st.markdown("---")
 
-        for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr in results:
+        for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at in results:
             col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
                 [0.20, 0.15, 0.10, 0.10, 0.14, 0.05, 0.04, 0.03]
             )
 
             with col1:
                 st.write(f"**{proposal_name}**")
+                
+                if locked_by and locked_by != st.session_state.current_user:
+                    st.caption(f"🔒 Editing: {locked_by}")
 
             with col2:
                 st.write(credit_union)
@@ -877,12 +922,16 @@ if section == "Proposal Library":
 
             with col5:
                 st.caption(f"Last updated: {updated_at}")
+                if updated_by:
+                    st.caption(f"By: {updated_by}")
 
             with col6:
                 if st.button("OPEN", key=f"open_{proposal_id}", type="secondary", help="Continue editing proposal"):
                     saved_data = load_proposal(proposal_id)
 
                     if saved_data:
+                        lock_proposal(proposal_id, st.session_state.current_user)
+
                         load_saved_data(saved_data)
                         st.session_state.current_proposal_id = proposal_id
                         st.session_state.active_section = "Proposal Details"
@@ -959,10 +1008,14 @@ elif section == "Proposal Details":
             "Proposal Date",
             st.session_state.proposal_date,
         )
+
+        options = ["Shannan", "Erica"]
+
         st.session_state.msr = st.selectbox(
             "MSR",
-            ["Shannan", "Erica"],
-            index=["Shannan", "Erica"].index(st.session_state.get("msr", "Shannan"))
+            options,
+            index=options.index(st.session_state.get("msr"))
+            if st.session_state.get("msr") in options else 0
         )
 
     section_complete_checkbox("Proposal Details")
@@ -1491,7 +1544,8 @@ elif section == "Generate Proposal":
                st.session_state.proposal_type,
                st.session_state.proposal_status,
                saved_data,
-               st.session_state.msr
+               st.session_state.msr,
+               st.session_state.current_user
             )
 
             st.session_state.current_proposal_id = proposal_id
@@ -1509,7 +1563,8 @@ elif section == "Generate Proposal":
                st.session_state.proposal_type,
                st.session_state.proposal_status,
                saved_data,
-               st.session_state.msr
+               st.session_state.msr,
+               st.session_state.current_user
             )              
 
             st.session_state.current_proposal_id = proposal_id
@@ -1588,7 +1643,8 @@ elif section == "Generate Proposal":
                 st.session_state.proposal_type,
                 st.session_state.proposal_status,
                 saved_data,
-                st.session_state.msr
+                st.session_state.msr,
+                st.session_state.current_user
             )
 
             st.session_state.current_proposal_id = proposal_id
