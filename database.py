@@ -1,12 +1,16 @@
 import sqlite3
 import json
 from datetime import datetime
+from pathlib import Path
 
-DB_NAME = "proposals.db"
+DB_NAME = Path(__file__).parent / "proposals.db"
 
 
 def get_connection():
-    return sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
+    return conn
 
 
 def initialize_database():
@@ -19,6 +23,7 @@ def initialize_database():
             proposal_name TEXT NOT NULL,
             credit_union TEXT NOT NULL,
             proposal_type TEXT NOT NULL,
+            msr TEXT DEFAULT '',
             status TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -30,7 +35,7 @@ def initialize_database():
     conn.close()
 
 
-def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, status, saved_data):
+def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, status, saved_data, msr=""):
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -43,6 +48,7 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
             SET proposal_name = ?,
                 credit_union = ?,
                 proposal_type = ?,
+                msr = ?,
                 status = ?,
                 updated_at = ?,
                 saved_data_json = ?
@@ -51,6 +57,7 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
             proposal_name,
             credit_union,
             proposal_type,
+            msr,
             status,
             now,
             saved_json,
@@ -62,16 +69,18 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
                 proposal_name,
                 credit_union,
                 proposal_type,
+                msr,
                 status,
                 created_at,
                 updated_at,
                 saved_data_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             proposal_name,
             credit_union,
             proposal_type,
+            msr,
             status,
             now,
             now,
@@ -86,12 +95,12 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
     return proposal_id
 
 
-def search_proposals(search_text="", status_filter="All"):
+def search_proposals(search_text="", status_filter="All", msr_filter="All"):
     conn = get_connection()
     cursor = conn.cursor()
 
     query = """
-        SELECT id, proposal_name, credit_union, proposal_type, status, updated_at
+        SELECT id, proposal_name, credit_union, proposal_type, status, updated_at, msr
         FROM proposals
         WHERE 1=1
     """
@@ -104,14 +113,19 @@ def search_proposals(search_text="", status_filter="All"):
                 proposal_name LIKE ?
                 OR credit_union LIKE ?
                 OR proposal_type LIKE ?
+                OR msr LIKE ?
             )
         """
         search_value = f"%{search_text.strip()}%"
-        params.extend([search_value, search_value, search_value])
+        params.extend([search_value, search_value, search_value, search_value])
 
     if status_filter != "All":
         query += " AND status = ?"
         params.append(status_filter)
+
+    if msr_filter != "All":
+        query += " AND msr = ?"
+        params.append(msr_filter)
 
     query += " ORDER BY updated_at DESC"
 
@@ -138,4 +152,36 @@ def load_proposal(proposal_id):
     if not row:
         return None
 
-    return json.loads(row[0])
+    try:
+        return json.loads(row[0])
+    except json.JSONDecodeError:
+        return None
+
+
+def delete_proposal(proposal_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM proposals
+        WHERE id = ?
+    """, (proposal_id,))
+
+    conn.commit()
+    conn.close()
+
+def update_proposal_status(proposal_id, status):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cursor.execute("""
+        UPDATE proposals
+        SET status = ?,
+            updated_at = ?
+        WHERE id = ?
+    """, (status, now, proposal_id))
+
+    conn.commit()
+    conn.close()
