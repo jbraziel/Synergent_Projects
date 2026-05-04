@@ -856,7 +856,7 @@ if section == "Proposal Library":
 
         for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at in results:
             col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-                [0.20, 0.15, 0.10, 0.10, 0.14, 0.05, 0.04, 0.03]
+                [0.20, 0.15, 0.10, 0.10, 0.14, 0.05, 0.02, 0.02]
             )
 
             with col1:
