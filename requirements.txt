@@ -1,2 +1,6 @@
 streamlit
-python-docx
+streamlit
+python-pptx
+Pillow
+XlsxWriter
+lxml
