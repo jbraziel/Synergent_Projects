@@ -445,6 +445,7 @@ def highlight_emp_pricing_tier(prs):
     WHITE = RGBColor(255, 255, 255)
 
     tier_number = str(proposal_data.get("{{emp_tier_number}}", "")).strip()
+    print("DEBUG EMP tier number:", tier_number)
 
     if not tier_number:
         return
