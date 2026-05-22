@@ -159,13 +159,13 @@ st.markdown(
 # Constants
 # -----------------------------
 TEMPLATE_MAP = {
-    "Auto Loan Recapture Campaign": "ACH_Auto_Proposal_Template.docx",
-    "Credit Card Campaign": "Credit_Card_Proposal_Template.docx",
-    "Home Lending Campaign": "Home_Lending_Proposal_Template.docx",
-    "Consumer Loan Campaign": "Consumer_Loan_Proposal_Template.docx",
-    "Checking Campaign": "Checking_Proposal_Template.docx",
-    "Certificate Campaign": "CD_Proposal_Template.docx",
-    "Synergent Email Platform Proposal": "Email_Platform_Proposal_Template.docx",
+    "Auto Loan Recapture Campaign": "ACH_Auto_Proposal_Template.pptx",
+    "Credit Card Campaign": "Credit_Card_Proposal_Template.pptx",
+    "Home Lending Campaign": "Home_Lending_Proposal_Template.pptx",
+    "Consumer Loan Campaign": "Consumer_Loan_Proposal_Template.pptx",
+    "Checking Campaign": "Checking_Proposal_Template.pptx",
+    "Certificate Campaign": "CD_Proposal_Template.pptx",
+    "Synergent Email Platform Proposal": "Email_Platform_Proposal_Template.pptx",
 }
 
 DEFAULT_COMPONENTS = [
@@ -964,8 +964,8 @@ if section == "Proposal Library":
                           label="↓",
                           data=file,
                           file_name=os.path.basename(file_path),
-                          mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                          key=f"download_docx_{proposal_id}",
+                          mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                          key=f"download_pptx_{proposal_id}",
                           help="Download proposal"
                         )
                 else:
@@ -1451,6 +1451,13 @@ elif section == "Generate Proposal":
 
     costs = calculate_costs()
 
+    one_time_campaign_cost = costs["campaign_1_calc"]
+
+    if one_time_campaign_cost > 0:
+        target_roi = estimated_first_year_interest / one_time_campaign_cost
+    else:
+        target_roi = 0
+
     campaign_1_cost = st.session_state.get(
         "campaign_1_cost_override",
         money(costs["campaign_1_calc"]),
@@ -1608,6 +1615,8 @@ elif section == "Generate Proposal":
             gp.proposal_data["{{campaign_4_cost}}"] = campaign_4_cost
             gp.proposal_data["{{campaign_4_per_cost}}"] = campaign_4_per_cost
 
+            gp.proposal_data["{{target_ROI}}"] = f"${target_roi:.2f}"
+
             gp.target_segments.clear()
             gp.target_segments.extend(selected_targets)
 
@@ -1622,11 +1631,24 @@ elif section == "Generate Proposal":
             credit_union_clean = st.session_state.credit_union
             proposal_name_clean = st.session_state.proposal_name
             
-            file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.docx"
+            file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.pptx"
             
             os.makedirs("generated_proposals", exist_ok=True)
             
             file_path = os.path.join("generated_proposals", file_name)
+
+            one_time_campaign_cost = costs["campaign_1_calc"]
+
+            if one_time_campaign_cost > 0:
+                target_roi = estimated_first_year_interest / one_time_campaign_cost
+            else:
+                target_roi = 0
+            
+            gp.proposal_data["{{target_ROI}}"] = f"${target_roi:.2f}"
+            
+            gp.proposal_data["{{total_targets_line}}"] = (
+                f"Total Targets (de-duped by SSN): {total_targets:,}"
+            )
             
             gp.main(output_path=file_path)
 
@@ -1660,11 +1682,11 @@ elif section == "Generate Proposal":
                 credit_union_clean = st.session_state.credit_union.replace(" ", " ")
                 proposal_name_clean = st.session_state.proposal_name.replace(" ", " ")
                 
-                file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.docx"
+                file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.pptx"
 
                 st.download_button(
                     label="Download Generated Proposal",
                     data=file,
                     file_name=file_name,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 )
