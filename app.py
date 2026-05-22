@@ -160,12 +160,7 @@ st.markdown(
 # -----------------------------
 TEMPLATE_MAP = {
     "Auto Loan Recapture Campaign": "ACH_Auto_Proposal_Template.pptx",
-    "Credit Card Campaign": "Credit_Card_Proposal_Template.pptx",
-    "Home Lending Campaign": "Home_Lending_Proposal_Template.pptx",
-    "Consumer Loan Campaign": "Consumer_Loan_Proposal_Template.pptx",
-    "Checking Campaign": "Checking_Proposal_Template.pptx",
-    "Certificate Campaign": "CD_Proposal_Template.pptx",
-    "Synergent Email Platform Proposal": "Email_Platform_Proposal_Template.pptx",
+    "Synergent Email Platform Proposal": "EMP_Proposal_Template.pptx",
 }
 
 DEFAULT_COMPONENTS = [
@@ -220,6 +215,37 @@ REQUIRED_SECTIONS = [
 # -----------------------------
 # Helper functions
 # -----------------------------
+
+def get_required_sections():
+    if st.session_state.proposal_type == "Synergent Email Platform Proposal":
+        return [
+            "Proposal Details",
+            "EMP Details",
+        ]
+
+    return [
+        "Proposal Details",
+        "Campaign Targets",
+        "Conversion Metrics",
+        "Campaign Components",
+        "Cost Estimator",
+    ]
+
+def calculate_emp_tier_cost(total_subscribers):
+    if 2500 <= total_subscribers <= 4999:
+        return 59.54, "Tier 1"
+    elif 5000 <= total_subscribers <= 9999:
+        return 108.14, "Tier 2"
+    elif 10000 <= total_subscribers <= 14999:
+        return 156.74, "Tier 3"
+    elif 15000 <= total_subscribers <= 24999:
+        return 241.79, "Tier 4"
+    elif 25000 <= total_subscribers <= 49999:
+        return 363.29, "Tier 5"
+    elif 50000 <= total_subscribers <= 74999:
+        return 545.54, "Tier 6"
+    else:
+        return None, "Custom"
 
 def auto_save_proposal():
     # Only auto-save after a proposal has been created/saved once
@@ -292,7 +318,14 @@ def collect_saved_data():
     for name in STRAIGHT_COST_ITEMS:
         data[f"cost_{name}"] = st.session_state.get(f"cost_{name}", True)
 
-    for sec in REQUIRED_SECTIONS:
+    for sec in [
+    "Proposal Details",
+    "Campaign Targets",
+    "Conversion Metrics",
+    "Campaign Components",
+    "Cost Estimator",
+    "EMP Details",
+    ]:
         data[f"complete_{sec}"] = st.session_state.get(f"complete_{sec}", False)
 
     return data
@@ -305,6 +338,24 @@ def load_saved_data(data):
 
         st.session_state[key] = value
 
+def get_workflow_sections():
+    if st.session_state.proposal_type == "Synergent Email Platform Proposal":
+        return [
+            "Proposal Details",
+            "EMP Details",
+            "Generate Proposal",
+        ]
+
+    return [
+        "Proposal Details",
+        "Campaign Targets",
+        "Conversion Metrics",
+        "Campaign Components",
+        "Cost Estimator",
+        "Generate Proposal",
+    ]
+
+
 def section_complete_checkbox(section_name):
     saved_key = f"complete_{section_name}"
     widget_key = f"widget_{saved_key}"
@@ -312,15 +363,27 @@ def section_complete_checkbox(section_name):
     if saved_key not in st.session_state:
         st.session_state[saved_key] = False
 
-    if widget_key not in st.session_state:
-        st.session_state[widget_key] = st.session_state[saved_key]
+    st.markdown("### ✅ Section Completion")
+    st.info("Check this box when this section is complete. The app will automatically move you to the next step.")
 
-    value = st.checkbox(
-        "Mark this section complete",
-        key=widget_key
+    checked = st.checkbox(
+        f"Mark {section_name} complete",
+        key=widget_key,
+        value=st.session_state[saved_key]
     )
 
-    st.session_state[saved_key] = value
+    if checked and not st.session_state[saved_key]:
+        st.session_state[saved_key] = True
+
+        sections = get_workflow_sections()
+        current_index = sections.index(section_name)
+
+        if current_index + 1 < len(sections):
+            st.session_state.active_section = sections[current_index + 1]
+            st.rerun()
+
+    else:
+        st.session_state[saved_key] = checked
 
 def persistent_checkbox(label, saved_key, default=True):
     widget_key = f"widget_{saved_key}"
@@ -463,7 +526,8 @@ def init_state():
         "current_proposal_id": None,
         "proposal_status": "Draft",
         "msr": "",
-        "current_user": ""
+        "current_user": "",
+        "total_subscribers": 15000
     }
 
     for key, value in defaults.items():
@@ -701,15 +765,21 @@ with st.sidebar:
     if st.session_state.active_section != "Proposal Library":
         st.markdown("### Proposal Workflow")
 
-        workflow_sections = [
-            "Proposal Details",
-            "Campaign Targets",
-            "Conversion Metrics",
-            "Campaign Components",
-            "Cost Estimator",
-            "Generate Proposal",
-
-        ]
+        if st.session_state.proposal_type == "Synergent Email Platform Proposal":
+           workflow_sections = [
+               "Proposal Details",
+               "EMP Details",
+               "Generate Proposal",
+            ]
+        else:
+            workflow_sections = [
+               "Proposal Details",
+               "Campaign Targets",
+               "Conversion Metrics",
+               "Campaign Components",
+               "Cost Estimator",
+               "Generate Proposal",
+            ]
 
         for sec in workflow_sections:
             selected = st.session_state.active_section == sec
@@ -978,6 +1048,7 @@ if section == "Proposal Library":
 # ============================================================
 elif section == "Proposal Details":
     st.subheader("Proposal Details")
+    section_complete_checkbox("Proposal Details")
 
     st.session_state.proposal_type = st.selectbox(
         "Select Proposal Template",
@@ -1018,7 +1089,7 @@ elif section == "Proposal Details":
             if st.session_state.get("msr") in options else 0
         )
 
-    section_complete_checkbox("Proposal Details")
+    
     auto_save_proposal()
 
 # ============================================================
@@ -1027,6 +1098,7 @@ elif section == "Proposal Details":
 elif section == "Campaign Targets":
     st.subheader("Campaign Targets")
     st.caption("Select target segments, adjust counts, or add custom targets.")
+    section_complete_checkbox("Campaign Targets")
 
     for i, (_, description) in enumerate(DEFAULT_TARGET_OPTIONS, start=1):
         col_check, col_count, col_desc = st.columns([0.08, 0.18, 0.74])
@@ -1096,7 +1168,7 @@ elif section == "Campaign Targets":
     total_targets = sum(count for count, _ in selected_targets)
     st.success(f"Total selected targets: {total_targets:,}")
 
-    section_complete_checkbox("Campaign Targets")
+    
     auto_save_proposal()
    
 
@@ -1105,6 +1177,7 @@ elif section == "Campaign Targets":
 # ============================================================
 elif section == "Conversion Metrics":
     st.subheader("Estimated Conversion Metrics")
+    section_complete_checkbox("Conversion Metrics")
 
     st.markdown("### Inputs")
 
@@ -1181,7 +1254,6 @@ elif section == "Conversion Metrics":
         "Estimated first-year interest is calculated using an amortized loan schedule."
     )
 
-    section_complete_checkbox("Conversion Metrics")
     auto_save_proposal()
 
 # ============================================================
@@ -1190,6 +1262,8 @@ elif section == "Conversion Metrics":
 elif section == "Campaign Components":
     st.subheader("Campaign Components")
     st.caption("Select standard components or add custom components.")
+    section_complete_checkbox("Campaign Components")
+
 
     for i, component in enumerate(DEFAULT_COMPONENTS, start=1):
        persistent_checkbox(
@@ -1220,7 +1294,7 @@ elif section == "Campaign Components":
 
     st.success(f"Selected components: {len(get_selected_components())}")
 
-    section_complete_checkbox("Campaign Components")
+    
     auto_save_proposal()
 
 # ============================================================
@@ -1229,6 +1303,7 @@ elif section == "Campaign Components":
 elif section == "Cost Estimator":
     st.subheader("Estimated Costs")
     st.caption("Select internal cost items. These inputs calculate proposal pricing but do not appear in the proposal.")
+    section_complete_checkbox("Cost Estimator") 
 
     st.markdown("### Hourly Cost Items")
 
@@ -1424,9 +1499,45 @@ elif section == "Cost Estimator":
             money(costs["campaign_4_per_calc"]),
         )
 
-    section_complete_checkbox("Cost Estimator")  
+     
     auto_save_proposal()
 
+# ============================================================
+# EMP Details
+# ============================================================
+
+elif section == "EMP Details":
+    st.subheader("EMP Details")
+    section_complete_checkbox("EMP Details")
+
+    st.session_state.total_subscribers = st.number_input(
+        "Total Subscribers",
+        min_value=0,
+        value=st.session_state.get("total_subscribers", 15000),
+        step=100,
+    )
+
+    tier_cost, tier_name = calculate_emp_tier_cost(
+        st.session_state.total_subscribers
+    )
+
+    st.markdown("### Calculated Monthly Pricing")
+
+    if tier_cost is None:
+        st.warning("Subscriber count requires custom pricing.")
+    else:
+        essentials_cost = tier_cost + 100
+        premium_cost = tier_cost + 200
+        elite_cost = tier_cost + 200
+
+        st.write(f"Tier: {tier_name}")
+        st.write(f"Base: ${tier_cost:,.2f}")
+        st.write(f"Essentials: ${essentials_cost:,.2f}")
+        st.write(f"Premium: ${premium_cost:,.2f}")
+        st.write(f"Elite: ${elite_cost:,.2f}")
+
+    
+    auto_save_proposal()
 
 # ============================================================
 # Generate Proposal
@@ -1482,8 +1593,10 @@ elif section == "Generate Proposal":
     # -----------------------------
     # Completion check
     # -----------------------------
+    required_sections = get_required_sections()
+
     incomplete_sections = [
-        sec for sec in REQUIRED_SECTIONS
+        sec for sec in required_sections
         if not st.session_state.get(f"complete_{sec}", False)
     ]
 
@@ -1649,6 +1762,22 @@ elif section == "Generate Proposal":
             gp.proposal_data["{{total_targets_line}}"] = (
                 f"Total Targets (de-duped by SSN): {total_targets:,}"
             )
+
+            if st.session_state.proposal_type == "Synergent Email Platform Proposal":
+                tier_cost, tier_name = calculate_emp_tier_cost(
+                    st.session_state.total_subscribers
+                )
+
+                if tier_cost is None:
+                    st.error("This subscriber count requires custom pricing.")
+                    st.stop()
+
+                gp.proposal_data["{{total_subscribers}}"] = f"{st.session_state.total_subscribers:,}"
+                gp.proposal_data["{{tier_cost}}"] = f"${tier_cost:,.2f}"
+                gp.proposal_data["{{essentials_cost}}"] = f"${tier_cost + 100:,.2f}"
+                gp.proposal_data["{{premium_cost}}"] = f"${tier_cost + 200:,.2f}"
+                gp.proposal_data["{{elite_cost}}"] = f"${tier_cost + 200:,.2f}"
+                gp.proposal_data["{{emp_tier_number}}"] = tier_name.replace("Tier ", "")
             
             gp.main(output_path=file_path)
 
