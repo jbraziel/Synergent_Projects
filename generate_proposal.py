@@ -1,6 +1,7 @@
 from pptx import Presentation
 from pptx.util import Pt
 from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
 
 TEMPLATE_PATH = "ACH_Auto_Proposal_Template.pptx"
 OUTPUT_PATH = "Generated_ACH_Auto_Proposal.pptx"
@@ -388,6 +389,93 @@ def format_conversion_objective_in_shapes(shapes, sentence_start):
         if hasattr(shape, "shapes"):
             format_conversion_objective_in_shapes(shape.shapes, sentence_start)
 
+def format_emp_page_10_costs(prs):
+    BLUE_GREEN = RGBColor(60, 131, 148)
+    FONT_SIZE = Pt(8)
+
+    emp_values = [
+        proposal_data["{{tier_cost}}"],
+        proposal_data["{{essentials_cost}}"],
+        proposal_data["{{premium_cost}}"],
+        proposal_data["{{elite_cost}}"],
+    ]
+
+    if len(prs.slides) < 10:
+        return
+
+    slide = prs.slides[9]
+    format_emp_page_10_costs_in_shapes(slide.shapes, emp_values, BLUE_GREEN, FONT_SIZE)
+
+
+def format_emp_page_10_costs_in_shapes(shapes, emp_values, BLUE_GREEN, FONT_SIZE):
+    for shape in shapes:
+        if shape.has_text_frame:
+            for paragraph in shape.text_frame.paragraphs:
+                full_text = "".join(run.text for run in paragraph.runs).strip()
+
+                # Only package boxes, not Custom Set-up
+                if not full_text.startswith("Monthly Cost:"):
+                    continue
+
+                for value in emp_values:
+                    if value in full_text:
+                        for run in paragraph.runs:
+                            run.text = ""
+
+                        first_run = paragraph.runs[0] if paragraph.runs else paragraph.add_run()
+                        first_run.text = "Monthly Cost: "
+                        first_run.font.name = "Montserrat"
+                        first_run.font.size = FONT_SIZE
+                        first_run.font.bold = False
+
+                        value_run = paragraph.add_run()
+                        value_run.text = value
+                        value_run.font.name = "Montserrat"
+                        value_run.font.size = FONT_SIZE
+                        value_run.font.bold = True
+                        value_run.font.color.rgb = BLUE_GREEN
+
+                        break
+
+        if hasattr(shape, "shapes"):
+            format_emp_page_10_costs_in_shapes(shape.shapes, emp_values, BLUE_GREEN, FONT_SIZE)
+
+def highlight_emp_pricing_tier(prs):
+    GREEN = RGBColor(118, 189, 34)
+    WHITE = RGBColor(255, 255, 255)
+
+    tier_number = str(proposal_data.get("{{emp_tier_number}}", "")).strip()
+
+    if not tier_number:
+        return
+
+    # Page 8 = slide index 7
+    if len(prs.slides) < 8:
+        return
+
+    slide = prs.slides[7]
+
+    for shape in slide.shapes:
+        if not shape.has_table:
+            continue
+
+        table = shape.table
+
+        for row in table.rows:
+            row_text = " ".join(cell.text.strip() for cell in row.cells)
+
+            # Match the tier row
+            if row_text.startswith(tier_number + " "):
+                for cell in row.cells:
+                    cell.fill.solid()
+                    cell.fill.fore_color.rgb = GREEN
+
+                    for paragraph in cell.text_frame.paragraphs:
+                        for run in paragraph.runs:
+                            run.font.color.rgb = WHITE
+                            run.font.bold = True
+                            run.font.size = Pt(10.5)
+
 
 def main(output_path=None):
     build_dynamic_placeholder_values()
@@ -399,6 +487,11 @@ def main(output_path=None):
     replace_total_targets_line(prs)
     replace_conversion_estimate_sentence(prs)
 
+    is_emp_proposal = "{{tier_cost}}" in proposal_data and "{{essentials_cost}}" in proposal_data
+    if is_emp_proposal:
+      format_emp_page_10_costs(prs)
+      highlight_emp_pricing_tier(prs)
+    
     if output_path is None:
         output_path = OUTPUT_PATH
 
