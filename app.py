@@ -331,7 +331,7 @@ def clean_folder_name(name):
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
     
-    ONE_DRIVE_ROOT = ( r"C:\Users\jenbr\OneDrive\Marketing Proposal Generator\Generated Proposals")
+    ONE_DRIVE_ROOT = ( r"C:\Users\jbraziel\OneDrive\Marketing Proposal Generator\Generated Proposals")
     base_folder = os.path.join(ONE_DRIVE_ROOT, cu_folder)
     drafts_folder = os.path.join(base_folder, "Drafts")
     sent_folder = os.path.join(base_folder, "Sent")
