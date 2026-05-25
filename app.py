@@ -331,8 +331,8 @@ def clean_folder_name(name):
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
     
-    ONE_DRIVE_ROOT = ( r"C:\Users\jbraziel\OneDrive\Marketing Proposal Generator\Generated Proposals")
-    base_folder = os.path.join(ONE_DRIVE_ROOT, cu_folder)
+    SHARED_ROOT = r"I:\DMS\Data Mining\Marketing Proposal Generator"
+    base_folder = os.path.join(SHARED_ROOT, cu_folder)
     drafts_folder = os.path.join(base_folder, "Drafts")
     sent_folder = os.path.join(base_folder, "Sent")
     pricing_folder = os.path.join(base_folder, "Pricing Exports")
@@ -1986,6 +1986,7 @@ elif section == "Generate Proposal":
             saved_data["file_path"] = file_path
             saved_data["sent_file_path"] = sent_file_path
             saved_data["sent_at"] = timestamp
+            saved_data["pricing_export_path"] = pricing_export_path
     
             st.session_state.proposal_status = "CU Review"
 
