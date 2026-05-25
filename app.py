@@ -331,12 +331,14 @@ def clean_folder_name(name):
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
     
-    SHARED_ROOT = r"I:\DMS\Data Mining\Marketing Proposal Generator"
+    SHARED_ROOT = r"\\Synergent.local\DMS\Data Mining\Marketing Proposal Generator"
     base_folder = os.path.join(SHARED_ROOT, cu_folder)
     drafts_folder = os.path.join(base_folder, "Drafts")
     sent_folder = os.path.join(base_folder, "Sent")
     pricing_folder = os.path.join(base_folder, "Pricing Exports")
     signed_folder = os.path.join(base_folder, "Signed")
+    st.write("Shared root exists:", os.path.exists(SHARED_ROOT))
+    st.write("Shared root path:", SHARED_ROOT)
 
     os.makedirs(drafts_folder, exist_ok=True)
     os.makedirs(sent_folder, exist_ok=True)
@@ -2041,6 +2043,10 @@ elif section == "Generate Proposal":
             )
     
             signed_file_path = os.path.join(signed_folder, signed_file_name)
+
+            st.write("Latest sent file exists:", os.path.exists(latest_sent_file))
+            st.write("Copying from:", latest_sent_file)
+            st.write("Copying to:", signed_file_path)
     
             shutil.copy2(latest_sent_file, signed_file_path)
     
