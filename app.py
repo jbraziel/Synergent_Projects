@@ -330,8 +330,9 @@ def clean_folder_name(name):
 
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
-
-    base_folder = os.path.join("generated_proposals", cu_folder)
+    
+    ONE_DRIVE_ROOT = ( r"C:\Users\jenbr\OneDrive\Marketing Proposal Generator\Generated Proposals")
+    base_folder = os.path.join(ONE_DRIVE_ROOT, cu_folder)
     drafts_folder = os.path.join(base_folder, "Drafts")
     sent_folder = os.path.join(base_folder, "Sent")
     pricing_folder = os.path.join(base_folder, "Pricing Exports")
@@ -339,8 +340,8 @@ def get_credit_union_output_folder(credit_union):
 
     os.makedirs(drafts_folder, exist_ok=True)
     os.makedirs(sent_folder, exist_ok=True)
-    os.makedirs(pricing_folder, exist_ok=True)
     os.makedirs(signed_folder, exist_ok=True)
+    os.makedirs(pricing_folder, exist_ok=True)
 
     return base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder
 
@@ -1920,6 +1921,7 @@ elif section == "Generate Proposal":
             st.session_state.current_proposal_id = proposal_id
 
             st.success("Proposal generated successfully!")
+            st.caption(f"Saved to: {drafts_folder}")
 
             with open(file_path, "rb") as file:
 
@@ -2006,6 +2008,7 @@ elif section == "Generate Proposal":
             st.session_state.current_proposal_id = proposal_id
     
             st.success(f"Sent snapshot saved: {sent_file_name}") 
+            st.caption(f"Saved to: {sent_folder}")
             st.rerun()          
     
     # -----------------------------
@@ -2063,3 +2066,4 @@ elif section == "Generate Proposal":
             st.session_state.current_proposal_id = proposal_id
     
             st.success(f"Signed proposal snapshot saved: {signed_file_name}")
+            st.caption(f"Saved to: {signed_folder}")
