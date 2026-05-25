@@ -1,14 +1,18 @@
 import streamlit as st
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import generate_proposal as gp
 from database import initialize_database, save_proposal, search_proposals, load_proposal, delete_proposal, update_proposal_status, lock_proposal, unlock_proposal
 import os
 import json
+import re
+import shutil
+import csv
 
 st.set_page_config(page_title="Marketing Proposal Generator", layout="wide")
 
 initialize_database()
+
 
 # -----------------------------
 # CSS
@@ -216,6 +220,130 @@ REQUIRED_SECTIONS = [
 # Helper functions
 # -----------------------------
 
+def create_pricing_export_csv(pricing_folder):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    file_name = f"{timestamp} {clean_folder_name(st.session_state.credit_union)} Pricing Export.csv"
+    export_path = os.path.join(pricing_folder, file_name)
+
+    rows = []
+
+    rows.append(["Proposal Name", st.session_state.proposal_name])
+    rows.append(["Credit Union", st.session_state.credit_union])
+    rows.append(["Proposal Type", st.session_state.proposal_type])
+    rows.append(["Proposal Date", str(st.session_state.proposal_date)])
+    rows.append(["MSR", st.session_state.msr])
+    rows.append([])
+
+    if st.session_state.proposal_type == "Auto Loan Recapture Campaign":
+        selected_targets = get_selected_targets()
+        selected_components = get_selected_components()
+        total_targets = sum(count for count, _ in selected_targets)
+
+        conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
+        estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
+        amount_refinanced = estimated_loans_refinanced * st.session_state.avg_auto_balance
+        auto_interest_rate_decimal = parse_percent(st.session_state.auto_interest_rate)
+        estimated_first_year_interest = calculate_first_year_interest(
+            amount_refinanced,
+            auto_interest_rate_decimal,
+            st.session_state.auto_term_years,
+        )
+
+        costs = calculate_costs()
+
+        rows.append(["AUTO LOAN RECAPTURE INPUTS", ""])
+        rows.append(["Target Conversion Rate", st.session_state.conversion_rate])
+        rows.append(["Average Auto Balance", st.session_state.avg_auto_balance])
+        rows.append(["Average Interest Rate", st.session_state.auto_interest_rate])
+        rows.append(["Average Term Years", st.session_state.auto_term_years])
+        rows.append(["Total Targets", total_targets])
+        rows.append(["Estimated Loans Refinanced", estimated_loans_refinanced])
+        rows.append(["Estimated Amount Refinanced", amount_refinanced])
+        rows.append(["Estimated First-Year Interest", estimated_first_year_interest])
+        rows.append([])
+
+        rows.append(["TARGET SEGMENTS", "Count"])
+        for count, description in selected_targets:
+            rows.append([description, count])
+        rows.append([])
+
+        rows.append(["CAMPAIGN COMPONENTS", "Included"])
+        for component in selected_components:
+            rows.append([component, "Yes"])
+        rows.append([])
+
+        rows.append(["PRICING CALCULATION", "Amount"])
+        rows.append(["Creative Cost", costs["creative_cost"]])
+        rows.append(["Data Mining Cost", costs["data_mining_cost"]])
+        rows.append(["List Procurement Cost", costs["list_procurement_cost"]])
+        rows.append(["Print Cost", costs["print_cost"]])
+        rows.append(["Email Labor Cost", costs["email_labor_cost"]])
+        rows.append(["Email Send Cost", costs["email_send_cost"]])
+        rows.append(["Straight costs breakdown", "Amount", "Included"])
+        straight_cost_total_check = 0
+        for name, amount in STRAIGHT_COST_ITEMS.items():
+            included = st.session_state.get(f"cost_{name}", True)
+            if included:
+                straight_cost_total_check += amount
+            rows.append([
+                name,
+                amount,
+                "Yes" if included else "No"
+            ])
+        rows.append(["Straight Cost Total", straight_cost_total_check, ""])
+        rows.append([])
+
+        rows.append(["Custom Costs Total", costs["custom_costs_total"]])
+        rows.append(["One-Time Cost Total", costs["one_time_cost_total"]])
+        rows.append(["Repeating Cost Total", costs["repeating_cost_total"]])
+        rows.append(["1 Campaign Cost", costs["campaign_1_calc"]])
+        rows.append(["2 Campaigns Cost", costs["campaign_2_calc"]])
+        rows.append(["2 Campaigns Per Campaign", costs["campaign_2_per_calc"]])
+        rows.append(["4 Campaigns Cost", costs["campaign_4_calc"]])
+        rows.append(["4 Campaigns Per Campaign", costs["campaign_4_per_calc"]])
+
+    elif st.session_state.proposal_type == "Synergent Email Platform Proposal":
+        tier_cost, tier_name = calculate_emp_tier_cost(st.session_state.total_subscribers)
+
+        rows.append(["EMP INPUTS", ""])
+        rows.append(["Total Subscribers", st.session_state.total_subscribers])
+        rows.append(["Tier", tier_name])
+        rows.append(["Base Monthly Cost", tier_cost])
+        rows.append(["Essentials Monthly Cost", tier_cost + 100 if tier_cost else "Custom"])
+        rows.append(["Premium Monthly Cost", tier_cost + 200 if tier_cost else "Custom"])
+        rows.append(["Elite Monthly Cost", tier_cost + 200 if tier_cost else "Custom"])
+        rows.append(["Essentials Implementation", 5500])
+        rows.append(["Premium Implementation", 8000])
+        rows.append(["Elite Implementation", 10500])
+
+    with open(export_path, "w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file)
+        writer.writerows(rows)
+
+    return export_path
+
+def clean_folder_name(name):
+    name = re.sub(r'[<>:"/\\|?*]', "", name)
+    return name.strip()
+
+
+def get_credit_union_output_folder(credit_union):
+    cu_folder = clean_folder_name(credit_union)
+
+    base_folder = os.path.join("generated_proposals", cu_folder)
+    drafts_folder = os.path.join(base_folder, "Drafts")
+    sent_folder = os.path.join(base_folder, "Sent")
+    pricing_folder = os.path.join(base_folder, "Pricing Exports")
+    signed_folder = os.path.join(base_folder, "Signed")
+
+    os.makedirs(drafts_folder, exist_ok=True)
+    os.makedirs(sent_folder, exist_ok=True)
+    os.makedirs(pricing_folder, exist_ok=True)
+    os.makedirs(signed_folder, exist_ok=True)
+
+    return base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder
+
 def get_required_sections():
     if st.session_state.proposal_type == "Synergent Email Platform Proposal":
         return [
@@ -297,7 +425,12 @@ def collect_saved_data():
         "include_email_sends",
         "email_send_count",
         "msr",
-        "file_path"
+        "file_path",
+        "sent_file_path",
+        "sent_at",
+        "signed_file_path",
+        "signed_at",
+        "pricing_export_path"
     ]
 
     for key in keys_to_save:
@@ -947,9 +1080,11 @@ if section == "Proposal Library":
                      "Signed": "#76bd22",
                      "Declined": "#dc3545",
                  }
-             
-                 if status not in status_options:
-                     status = "Draft"
+                 
+                 current_status = status
+
+                 if current_status not in status_options:
+                     current_status = "Draft"
              
                  next_status = status_options[
                      (status_options.index(status) + 1) % len(status_options)
@@ -961,7 +1096,7 @@ if section == "Proposal Library":
                      st.markdown(
                          f"""
                          <div style="
-                             background-color:{status_colors[status]};
+                             background-color:{status_colors[current_status]};
                              color:white;
                              border-radius:20px;
                              padding:4px 10px;
@@ -972,7 +1107,7 @@ if section == "Proposal Library":
                              line-height:18px;
                              margin-top:4px;
                          ">
-                             {status}
+                             {current_status}
                          </div>
                          """,
                          unsafe_allow_html=True
@@ -981,7 +1116,7 @@ if section == "Proposal Library":
                  with button_col:
                      if st.button(
                          "↻",
-                         key=f"cycle_status_{proposal_id}",
+                         key=f"cycle_status_{proposal_id}_{current_status}",
                          help=f"Change status to {next_status}"
                      ):
                          update_proposal_status(proposal_id, next_status)
@@ -1671,24 +1806,6 @@ elif section == "Generate Proposal":
             st.session_state.current_proposal_id = proposal_id
             st.success("Proposal saved.")
 
-    with col_save_complete:
-        if st.button("Save as Complete"):
-            st.session_state.proposal_status = "Complete"
-            saved_data = collect_saved_data()
-
-            proposal_id = save_proposal(
-               st.session_state.get("current_proposal_id"),
-               st.session_state.proposal_name,
-               st.session_state.credit_union,
-               st.session_state.proposal_type,
-               st.session_state.proposal_status,
-               saved_data,
-               st.session_state.msr,
-               st.session_state.current_user
-            )              
-
-            st.session_state.current_proposal_id = proposal_id
-            st.success("Proposal saved as complete.")
 
     # -----------------------------
     # Run Generation
@@ -1746,9 +1863,11 @@ elif section == "Generate Proposal":
             
             file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.pptx"
             
-            os.makedirs("generated_proposals", exist_ok=True)
-            
-            file_path = os.path.join("generated_proposals", file_name)
+            base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
+                st.session_state.credit_union
+            )
+
+            file_path = os.path.join(drafts_folder, file_name)
 
             one_time_campaign_cost = costs["campaign_1_calc"]
 
@@ -1819,3 +1938,128 @@ elif section == "Generate Proposal":
                     file_name=file_name,
                     mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 )
+
+    # -----------------------------
+    # Sent Proposal Snapshot
+    # -----------------------------
+    st.markdown("### Sent Proposal Snapshot")
+    
+    file_path = st.session_state.get("file_path")
+    
+    if file_path and os.path.exists(file_path):
+        st.info(f"Current generated proposal: {os.path.basename(file_path)}")
+    else:
+        st.warning("Generate the proposal before marking it as sent.")
+    
+    if st.button("Mark Current Proposal as Sent to Credit Union"):
+        file_path = st.session_state.get("file_path")
+    
+        if not file_path or not os.path.exists(file_path):
+            st.error("Generate the proposal before marking it as sent.")
+        else:
+            from datetime import datetime
+    
+            base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
+                st.session_state.credit_union
+            )
+    
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+            original_name = os.path.basename(file_path)
+            sent_file_name = original_name.replace(
+                ".pptx",
+                f" SENT {timestamp}.pptx"
+            )
+    
+            sent_file_path = os.path.join(sent_folder, sent_file_name)
+            st.session_state.sent_file_path = sent_file_path
+    
+            shutil.copy2(file_path, sent_file_path)
+            st.session_state.sent_file_path = sent_file_path
+            st.session_state.sent_at = timestamp
+            pricing_export_path = create_pricing_export_csv(pricing_folder)
+            st.session_state.pricing_export_path = pricing_export_path
+    
+            saved_data = collect_saved_data()
+            saved_data["file_path"] = file_path
+            saved_data["sent_file_path"] = sent_file_path
+            saved_data["sent_at"] = timestamp
+    
+            st.session_state.proposal_status = "CU Review"
+
+            update_proposal_status(
+                st.session_state.current_proposal_id,
+                "CU Review"
+            )
+    
+            proposal_id = save_proposal(
+                st.session_state.get("current_proposal_id"),
+                st.session_state.proposal_name,
+                st.session_state.credit_union,
+                st.session_state.proposal_type,
+                st.session_state.proposal_status,
+                saved_data,
+                st.session_state.msr,
+                st.session_state.current_user
+            )
+    
+            st.session_state.current_proposal_id = proposal_id
+    
+            st.success(f"Sent snapshot saved: {sent_file_name}") 
+            st.rerun()          
+    
+    # -----------------------------
+    # Mark Sent Proposal as Signed
+    # -----------------------------
+    if st.button("Mark Sent Proposal as Signed"):
+
+        base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
+            st.session_state.credit_union
+        )
+    
+        sent_files = [
+            os.path.join(sent_folder, f)
+            for f in os.listdir(sent_folder)
+            if f.lower().endswith(".pptx")
+        ]
+    
+        if not sent_files:
+            st.error("No sent proposal snapshot found in the Sent folder.")
+        else:
+            # Get most recently created/modified sent proposal
+            latest_sent_file = max(sent_files, key=os.path.getmtime)
+    
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+            signed_file_name = os.path.basename(latest_sent_file).replace(
+                ".pptx",
+                f" SIGNED {timestamp}.pptx"
+            )
+    
+            signed_file_path = os.path.join(signed_folder, signed_file_name)
+    
+            shutil.copy2(latest_sent_file, signed_file_path)
+    
+            st.session_state.proposal_status = "Signed"
+            st.session_state.signed_file_path = signed_file_path
+            st.session_state.signed_at = timestamp
+    
+            saved_data = collect_saved_data()
+            saved_data["sent_file_path"] = latest_sent_file
+            saved_data["signed_file_path"] = signed_file_path
+            saved_data["signed_at"] = timestamp
+    
+            proposal_id = save_proposal(
+                st.session_state.get("current_proposal_id"),
+                st.session_state.proposal_name,
+                st.session_state.credit_union,
+                st.session_state.proposal_type,
+                st.session_state.proposal_status,
+                saved_data,
+                st.session_state.msr,
+                st.session_state.current_user
+            )
+    
+            st.session_state.current_proposal_id = proposal_id
+    
+            st.success(f"Signed proposal snapshot saved: {signed_file_name}")
