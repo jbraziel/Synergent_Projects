@@ -1062,7 +1062,7 @@ if section == "Proposal Library":
 
         for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at in results:
             col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-                [0.20, 0.15, 0.10, 0.10, 0.14, 0.05, 0.02, 0.02]
+                [0.22, 0.16, 0.12, 0.09, 0.15, 0.06, 0.04, 0.16]
             )
 
             with col1:
@@ -1159,7 +1159,6 @@ if section == "Proposal Library":
                 saved_data = load_proposal(proposal_id)
             
                 if isinstance(saved_data, str):
-                    import json
                     saved_data = json.loads(saved_data)
             
                 file_path = saved_data.get("file_path")
@@ -1167,18 +1166,9 @@ if section == "Proposal Library":
                 signed_file_path = saved_data.get("signed_file_path")
                 pricing_export_path = saved_data.get("pricing_export_path")
             
-                button_count = sum([
-                    bool(file_path and os.path.exists(file_path)),
-                    bool(sent_file_path and os.path.exists(sent_file_path)),
-                    bool(signed_file_path and os.path.exists(signed_file_path)),
-                    bool(pricing_export_path and os.path.exists(pricing_export_path)),
-                ])
+                dl1, dl2, dl3, dl4 = st.columns(4)
             
-                if button_count == 0:
-                    st.caption("No files")
-
-                else:
-
+                with dl1:
                     if file_path and os.path.exists(file_path):
                         with open(file_path, "rb") as file:
                             st.download_button(
@@ -1189,7 +1179,8 @@ if section == "Proposal Library":
                                 key=f"draft_{proposal_id}",
                                 help="Download Draft"
                             )
-            
+
+                with dl2:
                     if sent_file_path and os.path.exists(sent_file_path):
                         with open(sent_file_path, "rb") as file:
                             st.download_button(
@@ -1201,6 +1192,7 @@ if section == "Proposal Library":
                                 help="Download Sent Proposal"
                             )
             
+                with dl3:
                     if signed_file_path and os.path.exists(signed_file_path):
                         with open(signed_file_path, "rb") as file:
                             st.download_button(
@@ -1212,6 +1204,7 @@ if section == "Proposal Library":
                                 help="Download Signed Proposal"
                             )
             
+                with dl4:
                     if pricing_export_path and os.path.exists(pricing_export_path):
                         with open(pricing_export_path, "rb") as file:
                             st.download_button(
