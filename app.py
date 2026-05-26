@@ -1046,7 +1046,7 @@ if section == "Proposal Library":
         st.markdown("### Saved Proposals")
 
         h1, h2, h3, h4, h5, h6, h7, h8 = st.columns(
-           [0.20, 0.15, 0.10, 0.10, 0.14, 0.05, 0.04, 0.03]
+           [0.22, 0.16, 0.12, 0.09, 0.15, 0.06, 0.04, 0.16]
         )
 
         with h1: st.markdown("<span style='font-size:15px; font-weight:700;'>Proposal</span>", unsafe_allow_html=True)
