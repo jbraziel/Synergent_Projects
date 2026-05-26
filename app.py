@@ -1134,7 +1134,7 @@ if section == "Proposal Library":
                     st.caption(f"By: {updated_by}")
 
             with col6:
-                if st.button("OPEN", key=f"open_{proposal_id}", type="secondary", help="Continue editing proposal"):
+                if st.button("EDIT", key=f"open_{proposal_id}", type="secondary", help="Continue editing proposal"):
                     saved_data = load_proposal(proposal_id)
 
                     if saved_data:
@@ -1225,11 +1225,33 @@ elif section == "Proposal Details":
     st.subheader("Proposal Details")
     section_complete_checkbox("Proposal Details")
 
-    st.session_state.proposal_type = st.selectbox(
+    previous_type = st.session_state.get("proposal_type")
+
+    selected_type = st.selectbox(
         "Select Proposal Template",
         list(TEMPLATE_MAP.keys()),
-        index=list(TEMPLATE_MAP.keys()).index(st.session_state.proposal_type),
+        index=list(TEMPLATE_MAP.keys()).index(
+            st.session_state.proposal_type
+        ),
     )
+    
+    # Auto-update default proposal name ONLY when template changes
+    if selected_type != previous_type:
+    
+        defaults = {
+            "Auto Loan Recapture Campaign":
+                "ACH Auto Loan Recapture Proposal",
+    
+            "Synergent Email Platform Proposal":
+                "Synergent Email Platform Proposal",
+        }
+    
+        st.session_state.proposal_name = defaults.get(
+            selected_type,
+            ""
+        )
+
+    st.session_state.proposal_type = selected_type
 
     selected_template = TEMPLATE_MAP[st.session_state.proposal_type]
 
