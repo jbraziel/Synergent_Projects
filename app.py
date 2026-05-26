@@ -331,7 +331,7 @@ def clean_folder_name(name):
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
     
-    SHARED_ROOT = r"\\synergent.local\I$\DMS\Data Mining\Marketing Proposal Generator"
+    SHARED_ROOT = "generated_proposals"
     base_folder = os.path.join(SHARED_ROOT, cu_folder)
     drafts_folder = os.path.join(base_folder, "Drafts")
     sent_folder = os.path.join(base_folder, "Sent")
@@ -1157,27 +1157,71 @@ if section == "Proposal Library":
 
             with col8:
                 saved_data = load_proposal(proposal_id)
-
-                # If saved_data is stored as JSON text, convert it back to a dictionary
+            
                 if isinstance(saved_data, str):
                     import json
                     saved_data = json.loads(saved_data)
             
-                file_path = saved_data.get("file_path") if saved_data else None
+                file_path = saved_data.get("file_path")
+                sent_file_path = saved_data.get("sent_file_path")
+                signed_file_path = saved_data.get("signed_file_path")
+                pricing_export_path = saved_data.get("pricing_export_path")
+            
+                button_count = sum([
+                    bool(file_path and os.path.exists(file_path)),
+                    bool(sent_file_path and os.path.exists(sent_file_path)),
+                    bool(signed_file_path and os.path.exists(signed_file_path)),
+                    bool(pricing_export_path and os.path.exists(pricing_export_path)),
+                ])
+            
+                if button_count == 0:
+                    st.caption("No files")
 
-
-                if file_path and os.path.exists(file_path):
-                    with open(file_path, "rb") as file:
-                       st.download_button(
-                          label="↓",
-                          data=file,
-                          file_name=os.path.basename(file_path),
-                          mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                          key=f"download_pptx_{proposal_id}",
-                          help="Download proposal"
-                        )
                 else:
-                     st.caption("No file")
+
+                    if file_path and os.path.exists(file_path):
+                        with open(file_path, "rb") as file:
+                            st.download_button(
+                                "📄",
+                                data=file,
+                                file_name=os.path.basename(file_path),
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                key=f"draft_{proposal_id}",
+                                help="Download Draft"
+                            )
+            
+                    if sent_file_path and os.path.exists(sent_file_path):
+                        with open(sent_file_path, "rb") as file:
+                            st.download_button(
+                                "📤",
+                                data=file,
+                                file_name=os.path.basename(sent_file_path),
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                key=f"sent_{proposal_id}",
+                                help="Download Sent Proposal"
+                            )
+            
+                    if signed_file_path and os.path.exists(signed_file_path):
+                        with open(signed_file_path, "rb") as file:
+                            st.download_button(
+                                "✅",
+                                data=file,
+                                file_name=os.path.basename(signed_file_path),
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                key=f"signed_{proposal_id}",
+                                help="Download Signed Proposal"
+                            )
+            
+                    if pricing_export_path and os.path.exists(pricing_export_path):
+                        with open(pricing_export_path, "rb") as file:
+                            st.download_button(
+                                "💲",
+                                data=file,
+                                file_name=os.path.basename(pricing_export_path),
+                                mime="text/csv",
+                                key=f"pricing_{proposal_id}",
+                                help="Download Pricing Export"
+                            )
 
             st.markdown("<hr style='margin: 4px 0;'>", unsafe_allow_html=True)
 
@@ -2011,7 +2055,24 @@ elif section == "Generate Proposal":
             st.session_state.current_proposal_id = proposal_id
     
             st.success(f"Sent snapshot saved: {sent_file_name}") 
-            st.caption(f"Saved to: {sent_folder}")
+            if os.path.exists(sent_file_path):
+                with open(sent_file_path, "rb") as file:
+                    st.download_button(
+                       label="Download Sent Proposal",
+                       data=file,
+                       file_name=os.path.basename(sent_file_path),
+                       mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                       key="download_sent"
+                    )
+            if pricing_export_path and os.path.exists(pricing_export_path):
+                with open(pricing_export_path, "rb") as file:
+                    st.download_button(
+                       label="Download Pricing Export",
+                       data=file,
+                       file_name=os.path.basename(pricing_export_path),
+                       mime="text/csv",
+                       key="download_pricing"
+                    )
             st.rerun()          
     
     # -----------------------------
@@ -2073,4 +2134,12 @@ elif section == "Generate Proposal":
             st.session_state.current_proposal_id = proposal_id
     
             st.success(f"Signed proposal snapshot saved: {signed_file_name}")
-            st.caption(f"Saved to: {signed_folder}")
+            if os.path.exists(signed_file_path):
+               with open(signed_file_path, "rb") as file:
+                st.download_button(
+                    label="Download Signed Proposal",
+                    data=file,
+                    file_name=os.path.basename(signed_file_path),
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    key="download_signed"
+                )
