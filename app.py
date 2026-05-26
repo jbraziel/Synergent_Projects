@@ -331,7 +331,7 @@ def clean_folder_name(name):
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
     
-    SHARED_ROOT = r"\\Synergent.local\DMS\Data Mining\Marketing Proposal Generator"
+    SHARED_ROOT = r"\\synergent.local\I$\DMS\Data Mining\Marketing Proposal Generator"
     base_folder = os.path.join(SHARED_ROOT, cu_folder)
     drafts_folder = os.path.join(base_folder, "Drafts")
     sent_folder = os.path.join(base_folder, "Sent")
