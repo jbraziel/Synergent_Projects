@@ -43,6 +43,8 @@ target_segments = [
     (2047, "checking members who have a loan but no auto loan with the credit union"),
 ]
 
+credit_card_target_segments = []
+
 
 campaign_components = [
     "Creative concept, strategy and design",
@@ -123,6 +125,48 @@ def insert_target_segments(text_frame):
     run2.font.bold = True
     run2.font.color.rgb = RGBColor(60, 131, 148)
 
+def insert_credit_card_target_segments(text_frame):
+    text_frame.clear()
+
+    TARGET_FONT_SIZE = Pt(10)
+
+    for index, (qty, sentence) in enumerate(credit_card_target_segments):
+        p = text_frame.paragraphs[0] if index == 0 else text_frame.add_paragraph()
+
+        p.space_after = Pt(10)
+
+        run1 = p.add_run()
+        run1.text = "•  "
+        run1.font.name = "Montserrat"
+        run1.font.size = TARGET_FONT_SIZE
+
+        run2 = p.add_run()
+        run2.text = f"{qty:,}"
+        run2.font.name = "Montserrat"
+        run2.font.size = TARGET_FONT_SIZE
+        run2.font.bold = True
+        run2.font.color.rgb = RGBColor(60, 131, 148)
+
+        run3 = p.add_run()
+        run3.text = f" {sentence}"
+        run3.font.name = "Montserrat"
+        run3.font.size = TARGET_FONT_SIZE
+
+    p = text_frame.add_paragraph()
+    p.space_before = Pt(8)
+
+    run1 = p.add_run()
+    run1.text = "Total Targets (de-duped by SSN): "
+    run1.font.name = "Montserrat"
+    run1.font.size = Pt(10)
+
+    run2 = p.add_run()
+    run2.text = proposal_data["{{total_targets}}"]
+    run2.font.name = "Montserrat"
+    run2.font.size = Pt(10)
+    run2.font.bold = True
+    run2.font.color.rgb = RGBColor(60, 131, 148)
+
 def replace_placeholders_in_text_frame(text_frame, replacements):
     for paragraph in text_frame.paragraphs:
         full_text = "".join(run.text for run in paragraph.runs)
@@ -155,6 +199,9 @@ def replace_placeholders_in_shapes(shapes, replacements):
 
             if text_frame_contains_placeholder(shape.text_frame, "{{target_segment_summary}}"):
                 insert_target_segments(shape.text_frame)
+
+            if text_frame_contains_placeholder(shape.text_frame, "{{credit_card_target_segment_summary}}"):
+                insert_credit_card_target_segments(shape.text_frame)
 
             else:
                 replace_placeholders_in_text_frame(
