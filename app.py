@@ -9,6 +9,7 @@ import re
 import shutil
 import csv
 
+
 st.set_page_config(page_title="Marketing Proposal Generator", layout="wide")
 
 initialize_database()
@@ -165,6 +166,8 @@ st.markdown(
 TEMPLATE_MAP = {
     "Auto Loan Recapture Campaign": "ACH_Auto_Proposal_Template.pptx",
     "Synergent Email Platform Proposal": "EMP_Proposal_Template.pptx",
+    "General Lending Campaign": "Lending_Proposal_Template.pptx",
+    "Credit Card Campaign": "Credit_Card_Proposal_Template.pptx",
 }
 
 DEFAULT_COMPONENTS = [
@@ -220,6 +223,212 @@ REQUIRED_SECTIONS = [
 # Helper functions
 # -----------------------------
 
+def build_credit_card_campaign_objectives():
+
+    objectives = []
+
+    if "Balance Transfer" in st.session_state.credit_card_goals:
+        objectives.append(
+            "BALANCE TRANSFER\n"
+            "Increase credit card balances and strengthen member borrowing relationships by encouraging members to transfer higher-rate external credit card balances to the credit union’s credit card offering."
+        )
+
+    if "New Card Acquisition" in st.session_state.credit_card_goals:
+        objectives.append(
+            "NEW CARD ACQUISITION\n"
+            "Increase credit card adoption among targeted member segments through targeted outreach and promotion of the credit union’s credit card program."
+        )
+
+    if "Card Utilization & Activation" in st.session_state.credit_card_goals:
+        objectives.append(
+            "CARD UTILIZATION & ACTIVATION\n"
+            "Increase active credit card usage and strengthen top-of-wallet positioning by encouraging existing cardholders to engage more consistently with their credit union credit card."
+        )
+
+    return "\n\n".join(objectives)
+
+def get_selected_credit_card_targets():
+    selected_targets = []
+
+    credit_card_target_groups = {
+        "cc_bt": [
+            "Members with recurring ACH payments to external credit card providers"
+        ],
+        "cc_new": [
+            "Members with checking and no credit card with the credit union"
+        ],
+        "cc_util": [
+            "Existing credit card holders with low or inactive card usage"
+        ],
+    }
+
+    for key_prefix, default_targets in credit_card_target_groups.items():
+
+        for i, description in enumerate(default_targets):
+            include = st.session_state.get(
+                f"{key_prefix}_target_include_saved_{i}",
+                False
+            )
+
+            count = st.session_state.get(
+                f"{key_prefix}_target_count_saved_{i}",
+                0
+            )
+
+            if include and count > 0:
+                selected_targets.append(
+                    (int(count), description)
+                )
+
+        custom_key = f"{key_prefix}_custom_targets"
+
+        for target in st.session_state.get(custom_key, []):
+
+            if isinstance(target, str):
+                target = {
+                    "count": 0,
+                    "description": target
+                }
+
+            count = target.get("count", 0)
+            description = target.get("description", "")
+
+            if count > 0 and description.strip():
+                selected_targets.append(
+                    (int(count), description.strip())
+                )
+
+    return selected_targets
+
+def credit_card_target_section(section_label, key_prefix, default_targets):
+    st.markdown(f"#### {section_label}")
+
+    for i, target in enumerate(default_targets):
+        include_saved_key = f"{key_prefix}_target_include_saved_{i}"
+        count_saved_key = f"{key_prefix}_target_count_saved_{i}"
+
+        if include_saved_key not in st.session_state:
+            st.session_state[include_saved_key] = False
+
+        if count_saved_key not in st.session_state:
+            st.session_state[count_saved_key] = 0
+
+        col_check, col_count, col_desc = st.columns([0.08, 0.18, 0.74])
+
+        with col_check:
+            st.session_state[include_saved_key] = st.checkbox(
+                "",
+                value=st.session_state[include_saved_key],
+                key=f"widget_{include_saved_key}"
+            )
+
+        with col_count:
+            st.session_state[count_saved_key] = st.number_input(
+                "Count",
+                min_value=0,
+                value=int(st.session_state[count_saved_key]),
+                step=1,
+                key=f"widget_{count_saved_key}",
+                label_visibility="collapsed"
+            )
+
+        with col_desc:
+            st.text(target)
+
+    custom_key = f"{key_prefix}_custom_targets"
+
+    if custom_key not in st.session_state:
+        st.session_state[custom_key] = []
+
+    if st.button(
+        f"Add Custom {section_label} Target",
+        key=f"add_{key_prefix}_target"
+    ):
+        st.session_state[custom_key].append(
+            {"count": 0, "description": ""}
+        )
+        st.rerun()
+
+    st.session_state[custom_key] = [
+        {"count": 0, "description": target}
+        if isinstance(target, str)
+        else target
+        for target in st.session_state[custom_key]
+    ]
+
+    updated_targets = []
+
+    for i, target in enumerate(st.session_state[custom_key]):
+        col_count, col_desc = st.columns([0.25, 0.75])
+
+        with col_count:
+            count = st.number_input(
+                f"Custom {section_label} Target {i + 1} Count",
+                min_value=0,
+                value=int(target.get("count", 0)),
+                step=1,
+                key=f"{key_prefix}_custom_target_count_{i}",
+            )
+
+        with col_desc:
+            description = st.text_input(
+                f"Custom {section_label} Target {i + 1}",
+                value=target.get("description", ""),
+                key=f"{key_prefix}_custom_target_desc_{i}",
+            )
+
+        updated_targets.append(
+            {"count": int(count), "description": description}
+        )
+
+    st.session_state[custom_key] = updated_targets
+
+def convert_pptx_to_pdf(pptx_path):
+    import os
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+
+    powerpoint = None
+    presentation = None
+
+    try:
+        pdf_path = pptx_path.replace(".pptx", ".pdf")
+
+        powerpoint = win32com.client.Dispatch("PowerPoint.Application")
+        powerpoint.Visible = 1
+
+        presentation = powerpoint.Presentations.Open(
+            os.path.abspath(pptx_path),
+            WithWindow=False
+        )
+
+        presentation.SaveAs(
+            os.path.abspath(pdf_path),
+            32
+        )
+
+        return pdf_path
+
+    finally:
+        if presentation is not None:
+            presentation.Close()
+
+        if powerpoint is not None:
+            powerpoint.Quit()
+
+        pythoncom.CoUninitialize()
+
+ADD_NEW_CU_OPTION = "➕ Add New Credit Union"
+def load_credit_union_list():
+    try:
+        with open("CU List.csv", "r", encoding="utf-8-sig") as file:
+            names = [line.strip() for line in file if line.strip() and line.strip() != ADD_NEW_CU_OPTION]
+        return sorted(set(names))
+    except FileNotFoundError:
+        return []
+
 def create_pricing_export_csv(pricing_folder):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -234,6 +443,17 @@ def create_pricing_export_csv(pricing_folder):
     rows.append(["Proposal Date", str(st.session_state.proposal_date)])
     rows.append(["MSR", st.session_state.msr])
     rows.append([])
+    rows.append(["PROPOSAL NOTES", ""])
+
+    proposal_notes = st.session_state.get(
+       "proposal_notes",
+       ""
+    )  
+    if proposal_notes.strip():
+       rows.append(["Notes", proposal_notes])
+    else:
+       rows.append(["Notes", "(none)"])
+    rows.append([])
 
     if st.session_state.proposal_type == "Auto Loan Recapture Campaign":
         selected_targets = get_selected_targets()
@@ -242,21 +462,21 @@ def create_pricing_export_csv(pricing_folder):
 
         conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
         estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
-        amount_refinanced = estimated_loans_refinanced * st.session_state.avg_auto_balance
-        auto_interest_rate_decimal = parse_percent(st.session_state.auto_interest_rate)
+        amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
+        loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
         estimated_first_year_interest = calculate_first_year_interest(
             amount_refinanced,
-            auto_interest_rate_decimal,
-            st.session_state.auto_term_years,
+            loan_interest_rate_decimal,
+            st.session_state.loan_term_years,
         )
 
         costs = calculate_costs()
 
         rows.append(["AUTO LOAN RECAPTURE INPUTS", ""])
         rows.append(["Target Conversion Rate", st.session_state.conversion_rate])
-        rows.append(["Average Auto Balance", st.session_state.avg_auto_balance])
-        rows.append(["Average Interest Rate", st.session_state.auto_interest_rate])
-        rows.append(["Average Term Years", st.session_state.auto_term_years])
+        rows.append(["Average Auto Balance", st.session_state.avg_loan_balance])
+        rows.append(["Average Interest Rate", st.session_state.loan_interest_rate])
+        rows.append(["Average Term Years", st.session_state.loan_term_years])
         rows.append(["Total Targets", total_targets])
         rows.append(["Estimated Loans Refinanced", estimated_loans_refinanced])
         rows.append(["Estimated Amount Refinanced", amount_refinanced])
@@ -333,12 +553,11 @@ def get_credit_union_output_folder(credit_union):
     
     SHARED_ROOT = "generated_proposals"
     base_folder = os.path.join(SHARED_ROOT, cu_folder)
+
     drafts_folder = os.path.join(base_folder, "Drafts")
     sent_folder = os.path.join(base_folder, "Sent")
-    pricing_folder = os.path.join(base_folder, "Pricing Exports")
     signed_folder = os.path.join(base_folder, "Signed")
-    st.write("Shared root exists:", os.path.exists(SHARED_ROOT))
-    st.write("Shared root path:", SHARED_ROOT)
+    pricing_folder = os.path.join(base_folder, "Pricing Exports")
 
     os.makedirs(drafts_folder, exist_ok=True)
     os.makedirs(sent_folder, exist_ok=True)
@@ -409,9 +628,6 @@ def collect_saved_data():
         "credit_union",
         "proposal_date",
         "conversion_rate",
-        "avg_auto_balance",
-        "auto_interest_rate",
-        "auto_term_years",
         "custom_targets",
         "custom_components",
         "custom_costs",
@@ -433,7 +649,21 @@ def collect_saved_data():
         "sent_at",
         "signed_file_path",
         "signed_at",
-        "pricing_export_path"
+        "pricing_export_path",
+        "proposal_notes",
+        "loan_type",
+        "campaign_weeks",
+        "loan_interest_rate",
+        "avg_loan_balance",
+        "loan_term_years",
+        "sent_pdf_path",
+        "credit_card_goals",
+        "cc_bt_custom_targets",
+        "cc_new_custom_targets",
+        "cc_util_custom_targets",
+        "avg_credit_card_limit",
+        "avg_credit_card_rate",
+        "avg_interchange_per_card",
     ]
 
     for key in keys_to_save:
@@ -447,6 +677,23 @@ def collect_saved_data():
     for i, _ in enumerate(DEFAULT_TARGET_OPTIONS, start=1):
         data[f"target_include_saved_{i}"] = st.session_state.get(f"target_include_saved_{i}", i <= 5)
         data[f"target_count_saved_{i}"] = st.session_state.get(f"target_count_saved_{i}", DEFAULT_TARGET_OPTIONS[i - 1][0])
+
+    credit_card_target_prefixes = {
+       "cc_bt": 1,
+       "cc_new": 1,
+       "cc_util": 1,
+    }
+
+    for prefix, target_count in credit_card_target_prefixes.items():
+        for i in range(target_count):
+            data[f"{prefix}_target_include_saved_{i}"] = st.session_state.get(
+                f"{prefix}_target_include_saved_{i}",
+                False
+            )
+            data[f"{prefix}_target_count_saved_{i}"] = st.session_state.get(
+                f"{prefix}_target_count_saved_{i}",
+                0
+            )
 
     for i, _ in enumerate(DEFAULT_COMPONENTS, start=1):
         data[f"component_saved_{i}"] = st.session_state.get(f"component_saved_{i}", True)
@@ -554,9 +801,9 @@ def section_status(section_name):
     elif section_name == "Conversion Metrics":
         complete = (
             parse_percent(st.session_state.conversion_rate) > 0
-            and st.session_state.avg_auto_balance > 0
-            and parse_percent(st.session_state.auto_interest_rate) > 0
-            and st.session_state.auto_term_years > 0
+            and st.session_state.avg_loan_balance > 0
+            and parse_percent(st.session_state.loan_interest_rate) > 0
+            and st.session_state.loan_term_years > 0
         )
 
     elif section_name == "Campaign Components":
@@ -636,9 +883,6 @@ def init_state():
         "credit_union": "Sample Credit Union",
         "proposal_date": date.today(),
         "conversion_rate": "2%",
-        "avg_auto_balance": 18500,
-        "auto_interest_rate": "6.00%",
-        "auto_term_years": 5,
         "custom_targets": [],
         "custom_components": [],
         "custom_costs": [],
@@ -663,7 +907,21 @@ def init_state():
         "proposal_status": "Draft",
         "msr": "",
         "current_user": "",
-        "total_subscribers": 15000
+        "total_subscribers": 15000,
+        "proposal_notes": "",
+        "loan_type": "Auto Loan",
+        "campaign_weeks": 8,
+        "loan_interest_rate": "6.00%",
+        "avg_loan_balance": 18500,
+        "loan_term_years": 5,
+        "sent_pdf_path": "",
+        "credit_card_goals": [],
+        "cc_bt_custom_targets": [],
+        "cc_new_custom_targets": [],
+        "cc_util_custom_targets": [],
+        "avg_credit_card_limit": 5000,
+        "avg_credit_card_rate": "14.99%",
+        "avg_interchange_per_card": 75,
     }
 
     for key, value in defaults.items():
@@ -744,7 +1002,7 @@ def calculate_costs():
     markup_rate = 1.35
 
     creative_cost = (
-        st.session_state.creative_hours * 105
+        st.session_state.creative_hours * 115
         if st.session_state.include_creative
         else 0
     )
@@ -768,7 +1026,7 @@ def calculate_costs():
     )
 
     email_labor_cost = (
-        st.session_state.email_hours * 105
+        st.session_state.email_hours * 115
         if st.session_state.include_email_labor
         else 0
     )
@@ -990,12 +1248,12 @@ total_targets = sum(count for count, _ in selected_targets)
 
 conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
 estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
-amount_refinanced = estimated_loans_refinanced * st.session_state.avg_auto_balance
-auto_interest_rate_decimal = parse_percent(st.session_state.auto_interest_rate)
+amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
+loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
 estimated_first_year_interest = calculate_first_year_interest(
     amount_refinanced,
-    auto_interest_rate_decimal,
-    st.session_state.auto_term_years,
+    loan_interest_rate_decimal,
+    st.session_state.loan_term_years,
 )
 
 costs = calculate_costs()
@@ -1030,6 +1288,8 @@ if section == "Proposal Library":
     if st.button("Create New Proposal", key="create_new_proposal"):
         st.session_state.current_proposal_id = None
         st.session_state.proposal_status = "Draft"
+        st.session_state["complete_EMP Details"] = False
+        st.session_state["widget_complete_EMP Details"] = False
 
         for sec in REQUIRED_SECTIONS:
             st.session_state[f"complete_{sec}"] = False
@@ -1056,7 +1316,7 @@ if section == "Proposal Library":
         with h5: st.markdown("<span style='font-size:15px; font-weight:700;'>Last Updated</span>", unsafe_allow_html=True)
         with h6: st.markdown("<span style='font-size:15px; font-weight:700;'>Actions</span>", unsafe_allow_html=True)
         with h7: st.markdown("<span style='font-size:15px; font-weight:700;'></span>", unsafe_allow_html=True)
-        with h8: st.markdown("<span style='font-size:15px; font-weight:700;'></span>", unsafe_allow_html=True)
+        with h8: st.markdown("<span style='font-size:15px; font-weight:700;'>Downloads</span>", unsafe_allow_html=True)
         
         st.markdown("---")
 
@@ -1090,7 +1350,7 @@ if section == "Proposal Library":
                      current_status = "Draft"
              
                  next_status = status_options[
-                     (status_options.index(status) + 1) % len(status_options)
+                     (status_options.index(current_status) + 1) % len(status_options)
                  ]
              
                  pill_col, button_col = st.columns([0.60, 0.40])
@@ -1255,6 +1515,81 @@ elif section == "Proposal Details":
 
     selected_template = TEMPLATE_MAP[st.session_state.proposal_type]
 
+    # Lending-only proposal fields
+    if st.session_state.proposal_type == "General Lending Campaign":
+        st.markdown("### Lending Campaign Details")
+    
+        loan_type_options = [
+            "Auto Loan",
+            "Personal Loan",
+            "Vacation Loan",
+            "Home Equity Loan",
+            "Mortgage",
+            "Other"
+        ]
+    
+        selected_loan_type = st.selectbox(
+            "Loan Type",
+            loan_type_options,
+            index=loan_type_options.index(st.session_state.loan_type)
+            if st.session_state.loan_type in loan_type_options else loan_type_options.index("Other")
+        )
+    
+        if selected_loan_type == "Other":
+            st.session_state.loan_type = st.text_input(
+                "Custom Loan Type",
+                st.session_state.get("loan_type", "")
+            )
+        else:
+            st.session_state.loan_type = selected_loan_type
+    
+        # Auto-update proposal name for lending proposal
+        st.session_state.proposal_name = f"{st.session_state.loan_type} Campaign Proposal"
+    
+        campaign_week_options = ["4", "8", "12", "16", "Custom"]
+    
+        selected_campaign_weeks = st.selectbox(
+            "Campaign Duration",
+            campaign_week_options,
+            index=campaign_week_options.index(str(st.session_state.campaign_weeks))
+            if str(st.session_state.campaign_weeks) in campaign_week_options else campaign_week_options.index("Custom")
+        )
+    
+        if selected_campaign_weeks == "Custom":
+            st.session_state.campaign_weeks = st.number_input(
+                "Custom Campaign Weeks",
+                min_value=1,
+                max_value=52,
+                value=int(st.session_state.get("campaign_weeks", 8)),
+                step=1
+            )
+        else:
+            st.session_state.campaign_weeks = int(selected_campaign_weeks)
+    
+    if st.session_state.proposal_type == "Credit Card Campaign":
+
+        st.markdown("### Credit Card Campaign Goals")
+    
+        goals = []
+    
+        if st.checkbox("Balance Transfer"):
+            goals.append("Balance Transfer")
+    
+        if st.checkbox("New Card Acquisition"):
+            goals.append("New Card Acquisition")
+    
+        if st.checkbox("Card Utilization & Activation"):
+            goals.append("Card Utilization & Activation")
+    
+        st.session_state.credit_card_goals = goals
+    
+        st.session_state.proposal_name = (
+            " + ".join(goals)
+            + " Credit Card Campaign Proposal"
+            if goals
+            else "Credit Card Campaign Proposal"
+        )
+
     if not Path(selected_template).exists():
         st.warning(f"Template file not found yet: {selected_template}")
 
@@ -1266,10 +1601,68 @@ elif section == "Proposal Details":
             st.session_state.proposal_name,
         )
 
-        st.session_state.credit_union = st.text_input(
-            "Credit Union Name",
-            st.session_state.credit_union,
+        credit_union_list = load_credit_union_list()
+
+        ADD_NEW_CU_OPTION = "➕ Add New Credit Union"
+        
+        credit_union_options = credit_union_list + [ADD_NEW_CU_OPTION]
+        
+        current_credit_union = st.session_state.get(
+            "credit_union",
+            ""
         )
+        
+        if current_credit_union in credit_union_list:
+            credit_union_index = credit_union_options.index(
+                current_credit_union
+            )
+        else:
+            credit_union_index = 0
+        
+        
+        selected_credit_union = st.selectbox(
+            "Credit Union Name",
+            credit_union_options,
+            index=credit_union_index
+        )
+        
+        if selected_credit_union == ADD_NEW_CU_OPTION:
+        
+            custom_name = st.text_input(
+                "Custom Credit Union Name",
+                value="",
+                key="custom_credit_union_name"
+            )
+        
+            st.session_state.credit_union = custom_name
+        
+            save_new_cu = st.checkbox(
+                "Save to Credit Union List",
+                value=False
+            )
+        
+            if (
+                save_new_cu
+                and custom_name.strip()
+                and custom_name.lower()
+                not in [x.lower() for x in credit_union_list]
+            ):
+        
+                with open(
+                    "CU List.csv",
+                    "a",
+                    encoding="utf-8-sig"
+                ) as f:
+                    f.write(f"\n{custom_name.strip()}")
+        
+                st.success(
+                    f"Added '{custom_name.strip()}'"
+                )
+    
+        else:
+            st.session_state.credit_union = (
+                selected_credit_union
+            )
 
     with col2:
         st.session_state.proposal_date = st.date_input(
@@ -1285,6 +1678,16 @@ elif section == "Proposal Details":
             index=options.index(st.session_state.get("msr"))
             if st.session_state.get("msr") in options else 0
         )
+    
+    if "proposal_notes" not in st.session_state:
+        st.session_state.proposal_notes = ""
+
+    st.session_state.proposal_notes = st.text_area(
+        "Proposal Notes",
+        value=st.session_state.proposal_notes,
+        height=150,
+        placeholder="Internal notes about proposal decisions..."
+    )
 
     
     auto_save_proposal()
@@ -1295,77 +1698,103 @@ elif section == "Proposal Details":
 elif section == "Campaign Targets":
     st.subheader("Campaign Targets")
     st.caption("Select target segments, adjust counts, or add custom targets.")
-    section_complete_checkbox("Campaign Targets")
-
-    for i, (_, description) in enumerate(DEFAULT_TARGET_OPTIONS, start=1):
-        col_check, col_count, col_desc = st.columns([0.08, 0.18, 0.74])
-
-        with col_check:
-            persistent_checkbox(
-                "",
-                saved_key=f"target_include_saved_{i}",
-                default=i <= 5
-            )
-
-        with col_count:
-             count_key = f"target_count_saved_{i}"
-
-             if count_key not in st.session_state:
-                st.session_state[count_key] = DEFAULT_TARGET_OPTIONS[i - 1][0]
-
-             st.session_state[count_key] = st.number_input(
-                 "Count",
-                 min_value=0,
-                 value=st.session_state[count_key],
-                 step=1,
-                 key=f"widget_{count_key}",
-                 label_visibility="collapsed",
-            )
-
-        with col_desc:
-            st.text(description)
-
-    st.markdown("#### Custom Campaign Targets")
-
-    if st.button("Add Target"):
-        st.session_state.custom_targets.append(
-            {"count": 0, "description": ""}
-        )
-        st.rerun()
-
-    updated_custom_targets = []
-
-    for i, item in enumerate(st.session_state.custom_targets):
-        col_count, col_desc = st.columns([0.25, 0.75])
-
-        with col_count:
-            count = st.number_input(
-                f"Custom Target {i + 1} Count",
-                min_value=0,
-                value=int(item.get("count", 0)),
-                step=1,
-                key=f"custom_target_count_input_{i}",
-            )
-
-        with col_desc:
-            description = st.text_input(
-                f"Custom Target {i + 1} Description",
-                value=item.get("description", ""),
-                key=f"custom_target_desc_input_{i}",
-                placeholder="Example: members with external auto loan payment indicators",
-            )
-
-        updated_custom_targets.append(
-            {"count": int(count), "description": description}
-        )
-
-    st.session_state.custom_targets = updated_custom_targets
-
-    selected_targets = get_selected_targets()
-    total_targets = sum(count for count, _ in selected_targets)
-    st.success(f"Total selected targets: {total_targets:,}")
-
     
+    if st.session_state.proposal_type == "Credit Card Campaign":
+
+        st.markdown("### Credit Card Campaign Targets")
+    
+        if "Balance Transfer" in st.session_state.credit_card_goals:
+            credit_card_target_section(
+                "Balance Transfer",
+                "cc_bt",
+                ["Members with recurring ACH payments to external credit card providers"]
+            )
+    
+        if "New Card Acquisition" in st.session_state.credit_card_goals:
+            credit_card_target_section(
+                "New Card Acquisition",
+                "cc_new",
+                ["Members with checking and no credit card"]
+            )
+    
+        if "Card Utilization & Activation" in st.session_state.credit_card_goals:
+            credit_card_target_section(
+                "Card Utilization & Activation",
+                "cc_util",
+                ["Inactive credit card holders"]
+            )
+
+    else:
+
+        for i, (_, description) in enumerate(DEFAULT_TARGET_OPTIONS, start=1):
+            col_check, col_count, col_desc = st.columns([0.08, 0.18, 0.74])
+    
+            with col_check:
+                persistent_checkbox(
+                    "",
+                    saved_key=f"target_include_saved_{i}",
+                    default=i <= 5
+                )
+    
+            with col_count:
+                 count_key = f"target_count_saved_{i}"
+    
+                 if count_key not in st.session_state:
+                    st.session_state[count_key] = DEFAULT_TARGET_OPTIONS[i - 1][0]
+    
+                 st.session_state[count_key] = st.number_input(
+                     "Count",
+                     min_value=0,
+                     value=st.session_state[count_key],
+                     step=1,
+                     key=f"widget_{count_key}",
+                     label_visibility="collapsed",
+                )
+    
+            with col_desc:
+                st.text(description)
+
+        st.markdown("#### Custom Campaign Targets")
+    
+        if st.button("Add Target"):
+            st.session_state.custom_targets.append(
+                {"count": 0, "description": ""}
+            )
+            st.rerun()
+    
+        updated_custom_targets = []
+    
+        for i, item in enumerate(st.session_state.custom_targets):
+            col_count, col_desc = st.columns([0.25, 0.75])
+    
+            with col_count:
+                count = st.number_input(
+                    f"Custom Target {i + 1} Count",
+                    min_value=0,
+                    value=int(item.get("count", 0)),
+                    step=1,
+                    key=f"custom_target_count_input_{i}",
+                )
+    
+            with col_desc:
+                description = st.text_input(
+                    f"Custom Target {i + 1} Description",
+                    value=item.get("description", ""),
+                    key=f"custom_target_desc_input_{i}",
+                    placeholder="Example: members with external auto loan payment indicators",
+                )
+    
+            updated_custom_targets.append(
+                {"count": int(count), "description": description}
+            )
+    
+        st.session_state.custom_targets = updated_custom_targets
+    
+        selected_targets = get_selected_targets()
+        total_targets = sum(count for count, _ in selected_targets)
+        st.success(f"Total selected targets: {total_targets:,}")
+
+    section_complete_checkbox("Campaign Targets")
     auto_save_proposal()
    
 
@@ -1374,83 +1803,188 @@ elif section == "Campaign Targets":
 # ============================================================
 elif section == "Conversion Metrics":
     st.subheader("Estimated Conversion Metrics")
+    
+    
+    if st.session_state.proposal_type == "Credit Card Campaign":
+
+        st.markdown("### Credit Card Inputs")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.session_state.conversion_rate = st.text_input(
+                "Target Conversion Rate",
+                st.session_state.conversion_rate,
+            )
+
+        with col2:
+            st.session_state.avg_credit_card_limit = st.number_input(
+                "Average Credit Card Limit",
+                min_value=0,
+                value=int(st.session_state.get("avg_credit_card_limit", 5000)),
+                step=500,
+            )
+
+        with col3:
+            st.session_state.avg_credit_card_rate = st.text_input(
+                "Average Credit Card Rate",
+                st.session_state.get("avg_credit_card_rate", "14.99%"),
+            )
+
+        with col4:
+            st.session_state.avg_interchange_per_card = st.number_input(
+                "Estimated First-Year Interchange Per Card",
+                min_value=0,
+                value=int(st.session_state.get("avg_interchange_per_card", 75)),
+                step=5,
+            )
+        
+        selected_targets = get_selected_credit_card_targets()
+        total_targets = sum(count for count, _ in selected_targets)
+
+        conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
+        estimated_credit_cards_opened = round(total_targets * conversion_rate_decimal)
+
+        estimated_total_credit_card_balance_transferred = (
+            estimated_credit_cards_opened * st.session_state.avg_credit_card_limit
+        )
+
+        avg_credit_card_rate_decimal = parse_percent(st.session_state.avg_credit_card_rate)
+
+        estimated_first_year_interest = (
+            estimated_total_credit_card_balance_transferred
+            * avg_credit_card_rate_decimal
+        )
+
+        estimated_first_year_interchange = (
+            estimated_credit_cards_opened
+            * st.session_state.avg_interchange_per_card
+        )
+
+        st.markdown("### Calculated Results")
+
+        col5, col6, col7 = st.columns(3)
+
+        with col5:
+            st.text_input(
+                "Estimated Credit Cards Opened",
+                value=f"{estimated_credit_cards_opened:,}",
+                disabled=True,
+            )
+
+        with col6:
+            st.text_input(
+                "Estimated Total Credit Card Balance Transferred",
+                value=f"${estimated_total_credit_card_balance_transferred:,.0f}",
+                disabled=True,
+            )
+
+        with col7:
+            st.text_input(
+                "Estimated First-Year Interest",
+                value=f"${estimated_first_year_interest:,.0f}",
+                disabled=True,
+            )
+
+        col8, col9 = st.columns(2)
+
+        with col8:
+            st.text_input(
+                "Estimated First-Year Interchange",
+                value=f"${estimated_first_year_interchange:,.0f}",
+                disabled=True,
+            )
+
+        with col9:
+            st.text_input(
+                "Estimated Total First-Year Revenue",
+                value=f"${estimated_first_year_interest + estimated_first_year_interchange:,.0f}",
+                disabled=True,
+            )
+
+        st.caption(
+            "Estimated cards opened = total targets × conversion rate. "
+            "Estimated first-year interchange assumes $75 per opened credit card."
+        )
+
+    else:
+
+        st.markdown("### Inputs")
+    
+        col1, col2, col3, col4 = st.columns(4)
+    
+        with col1:
+            st.session_state.conversion_rate = st.text_input(
+                "Target Conversion Rate",
+                st.session_state.conversion_rate,
+            )
+        
+        with col2:
+            st.session_state.avg_loan_balance = st.number_input(
+                "Average Loan Amount / Balance",
+                min_value=0,
+                value=int(st.session_state.get("avg_loan_balance", 25000)),
+                step=500,
+            )
+        
+        with col3:
+            st.session_state.loan_interest_rate = st.text_input(
+                "Average Loan Interest Rate",
+                st.session_state.get("loan_interest_rate", "6.99%"),
+            )
+        
+        with col4:
+            st.session_state.loan_term_years = st.number_input(
+                "Average Loan Term Years",
+                min_value=1,
+                value=int(st.session_state.get("loan_term_years", 5)),
+                step=1,
+            )
+    
+        selected_targets = get_selected_targets()
+        total_targets = sum(count for count, _ in selected_targets)
+    
+        conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
+        estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
+        amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
+        loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
+        estimated_first_year_interest = calculate_first_year_interest(
+            amount_refinanced,
+            loan_interest_rate_decimal,
+            st.session_state.loan_term_years,
+        )
+    
+        st.markdown("### Calculated Results")
+    
+        col5, col6, col7 = st.columns(3)
+    
+        with col5:
+            st.text_input(
+                "Estimated Loans Refinanced",
+                value=f"{estimated_loans_refinanced:,}",
+                disabled=True,
+            )
+    
+        with col6:
+            st.text_input(
+                "Estimated Amount Refinanced",
+                value=f"${amount_refinanced:,.0f}",
+                disabled=True,
+            )
+    
+        with col7:
+            st.text_input(
+                "Estimated First-Year Interest",
+                value=f"${estimated_first_year_interest:,.0f}",
+                disabled=True,
+            )
+    
+        st.caption(
+            "Estimated loans refinanced = total targets × conversion rate. "
+            "Estimated first-year interest is calculated using an amortized loan schedule."
+        )
+
     section_complete_checkbox("Conversion Metrics")
-
-    st.markdown("### Inputs")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.session_state.conversion_rate = st.text_input(
-            "Target Conversion Rate",
-            st.session_state.conversion_rate,
-        )
-
-    with col2:
-        st.session_state.avg_auto_balance = st.number_input(
-            "Average Balance Refinanced",
-            min_value=0,
-            value=st.session_state.avg_auto_balance,
-            step=500,
-        )
-
-    with col3:
-        st.session_state.auto_interest_rate = st.text_input(
-            "Average Interest Rate",
-            st.session_state.auto_interest_rate,
-        )
-
-    with col4:
-        st.session_state.auto_term_years = st.number_input(
-            "Average Term Years",
-            min_value=1,
-            value=st.session_state.auto_term_years,
-            step=1,
-        )
-
-    selected_targets = get_selected_targets()
-    total_targets = sum(count for count, _ in selected_targets)
-
-    conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
-    estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
-    amount_refinanced = estimated_loans_refinanced * st.session_state.avg_auto_balance
-    auto_interest_rate_decimal = parse_percent(st.session_state.auto_interest_rate)
-    estimated_first_year_interest = calculate_first_year_interest(
-        amount_refinanced,
-        auto_interest_rate_decimal,
-        st.session_state.auto_term_years,
-    )
-
-    st.markdown("### Calculated Results")
-
-    col5, col6, col7 = st.columns(3)
-
-    with col5:
-        st.text_input(
-            "Estimated Loans Refinanced",
-            value=f"{estimated_loans_refinanced:,}",
-            disabled=True,
-        )
-
-    with col6:
-        st.text_input(
-            "Estimated Amount Refinanced",
-            value=f"${amount_refinanced:,.0f}",
-            disabled=True,
-        )
-
-    with col7:
-        st.text_input(
-            "Estimated First-Year Interest",
-            value=f"${estimated_first_year_interest:,.0f}",
-            disabled=True,
-        )
-
-    st.caption(
-        "Estimated loans refinanced = total targets × conversion rate. "
-        "Estimated first-year interest is calculated using an amortized loan schedule."
-    )
-
     auto_save_proposal()
 
 # ============================================================
@@ -1517,7 +2051,7 @@ elif section == "Cost Estimator":
             value=st.session_state.creative_hours,
             step=0.5,
         )
-        st.caption("Estimated at $105/hour")
+        st.caption("Estimated at $115/hour")
 
     with col2:
         st.session_state.include_data_mining = st.checkbox(
@@ -1576,7 +2110,7 @@ elif section == "Cost Estimator":
             value=st.session_state.email_hours,
             step=0.5,
         )
-        st.caption("Estimated at $105/hour")
+        st.caption("Estimated at $115/hour")
 
     with col2:
         st.session_state.include_email_sends = st.checkbox(
@@ -1743,18 +2277,22 @@ elif section == "Generate Proposal":
     st.subheader("Generate Proposal")
 
     selected_template = TEMPLATE_MAP[st.session_state.proposal_type]
-    selected_targets = get_selected_targets()
     selected_components = get_selected_components()
+    if st.session_state.proposal_type == "Credit Card Campaign":
+       selected_targets = get_selected_credit_card_targets()
+    else:
+       selected_targets = get_selected_targets()
+
     total_targets = sum(count for count, _ in selected_targets)
 
     conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
     estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
-    amount_refinanced = estimated_loans_refinanced * st.session_state.avg_auto_balance
-    auto_interest_rate_decimal = parse_percent(st.session_state.auto_interest_rate)
+    amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
+    loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
     estimated_first_year_interest = calculate_first_year_interest(
         amount_refinanced,
-        auto_interest_rate_decimal,
-        st.session_state.auto_term_years,
+        loan_interest_rate_decimal,
+        st.session_state.loan_term_years,
     )
 
     costs = calculate_costs()
@@ -1867,294 +2405,422 @@ elif section == "Generate Proposal":
 
             st.session_state.current_proposal_id = proposal_id
             st.success("Proposal saved.")
-
-
     # -----------------------------
     # Run Generation
     # -----------------------------
-    if generate_clicked:
-        if not selected_targets:
-            st.error("Please select at least one campaign target.")
-        elif not selected_components:
-            st.error("Please select at least one campaign component.")
-        elif not Path(selected_template).exists():
-            st.error(f"Template file is missing: {selected_template}")
-        else:
-            gp.TEMPLATE_PATH = selected_template
+    with st.expander("1. Generate Draft", expanded=False):
+       if st.session_state.get("file_path"):
+        st.info(
+            f"Current generated proposal:\n"
+            f"{os.path.basename(st.session_state.file_path)}"
+        )
+       if generate_clicked:
+           if not selected_targets:
+               st.error("Please select at least one campaign target.")
+           elif not selected_components:
+               st.error("Please select at least one campaign component.")
+           elif not Path(selected_template).exists():
+               st.error(f"Template file is missing: {selected_template}")
+           else:
+               gp.TEMPLATE_PATH = selected_template
+   
+               gp.proposal_data["{{proposal_name}}"] = st.session_state.proposal_name
+               gp.proposal_data["{{proposal_date}}"] = format_date_windows(
+                   st.session_state.proposal_date
+               )
+               gp.proposal_data["{{creditunion_name}}"] = st.session_state.credit_union
+               
+               # Credit Card Objectives
+               if st.session_state.proposal_type == "Credit Card Campaign":
 
-            gp.proposal_data["{{proposal_name}}"] = st.session_state.proposal_name
-            gp.proposal_data["{{proposal_date}}"] = format_date_windows(
-                st.session_state.proposal_date
-            )
-            gp.proposal_data["{{creditunion_name}}"] = st.session_state.credit_union
+                  gp.proposal_data["{{credit_card_campaign_objectives}}"] = (
+                     build_credit_card_campaign_objectives()
+                  )
 
-            gp.proposal_data["{{target_conversion_rate}}"] = st.session_state.conversion_rate
-            gp.proposal_data["{{total_targets}}"] = f"{total_targets:,}"
+               # -----------------------------
+               # Credit Card Proposal Variables
+               # -----------------------------
+               if st.session_state.proposal_type == "Credit Card Campaign":
 
-            gp.proposal_data["{{conversions}}"] = f"{estimated_loans_refinanced:,}"
-            gp.proposal_data["{{avg_auto_balance}}"] = f"${st.session_state.avg_auto_balance:,.0f}"
-            gp.proposal_data["{{amount_refinanced}}"] = f"${amount_refinanced:,.0f}"
-            gp.proposal_data["{{first_year_interest}}"] = f"${estimated_first_year_interest:,.0f}"
-            gp.proposal_data["{{auto_interest_rate}}"] = st.session_state.auto_interest_rate
-            gp.proposal_data["{{auto_term_years}}"] = str(st.session_state.auto_term_years)
+                  selected_targets = get_selected_credit_card_targets()
+              
+                  total_targets = sum(
+                      count for count, _ in selected_targets
+                  )
+              
+                  conversion_rate_decimal = parse_percent(
+                      st.session_state.conversion_rate
+                  )
+              
+                  estimated_credit_cards_opened = round(
+                      total_targets * conversion_rate_decimal
+                  )
+              
+                  estimated_total_card_balance = (
+                      estimated_credit_cards_opened
+                      * st.session_state.avg_credit_card_limit
+                  )
+              
+                  avg_rate_decimal = parse_percent(
+                      st.session_state.avg_credit_card_rate
+                  )
+              
+                  estimated_first_year_interest = (
+                      estimated_total_card_balance
+                      * avg_rate_decimal
+                  )
+              
+                  estimated_first_year_interchange = (
+                      estimated_credit_cards_opened
+                      * st.session_state.avg_interchange_per_card
+                  )
+              
+                  gp.proposal_data[
+                      "{{avg_credit_card_balance}}"
+                  ] = f"${st.session_state.avg_credit_card_limit:,.0f}"
+              
+                  gp.proposal_data[
+                      "{{avg_credit_card_rate}}"
+                  ] = st.session_state.avg_credit_card_rate
+              
+                  gp.proposal_data[
+                      "{{avg_interchange_per_card}}"
+                  ] = f"${st.session_state.avg_interchange_per_card:,.0f}"
+              
+                  gp.proposal_data[
+                      "{{estimated_credit_cards_opened}}"
+                  ] = f"{estimated_credit_cards_opened:,}"
+              
+                  gp.proposal_data[
+                      "{{estimated_total_card_balance}}"
+                  ] = f"${estimated_total_card_balance:,.0f}"
+              
+                  gp.proposal_data[
+                      "{{estimated_first_year_interest}}"
+                  ] = f"${estimated_first_year_interest:,.0f}"
+              
+                  gp.proposal_data[
+                      "{{estimated_first_year_interchange}}"
+                  ] = f"${estimated_first_year_interchange:,.0f}"
+              
+                  target_lines = []
+                  
+                  for count, desc in selected_targets:
+                      target_lines.append(
+                          f"•  {count:,}  {desc}"
+                      )
+                  target_lines.append("")
+                  target_lines.append(f"Total Targets (de-duped by SSN): {total_targets:,}")
+                  gp.proposal_data["{{credit_card_target_segments}}"] = "\n".join(target_lines)
+                  
+   
+               gp.proposal_data["{{target_conversion_rate}}"] = st.session_state.conversion_rate
+               gp.proposal_data["{{total_targets}}"] = f"{total_targets:,}"
+   
+               gp.proposal_data["{{conversions}}"] = f"{estimated_loans_refinanced:,}"
+               gp.proposal_data["{{amount_refinanced}}"] = f"${amount_refinanced:,.0f}"
+               gp.proposal_data["{{first_year_interest}}"] = f"${estimated_first_year_interest:,.0f}"
+               gp.proposal_data["{{loan_type}}"] = st.session_state.loan_type
+               gp.proposal_data["{{campaign_weeks}}"] = str(st.session_state.campaign_weeks)
+               gp.proposal_data["{{loan_interest_rate}}"] = st.session_state.loan_interest_rate
+               gp.proposal_data["{{avg_loan_balance}}"] = f"${st.session_state.avg_loan_balance:,.0f}"
+               gp.proposal_data["{{loan_term_years}}"] = str(st.session_state.loan_term_years)
+   
+               gp.proposal_data["{{total_targets_2}}"] = f"{total_targets * 2:,}"
+               gp.proposal_data["{{total_targets_4}}"] = f"{total_targets * 4:,}"
+   
+               gp.proposal_data["{{campaign_1_cost}}"] = campaign_1_cost
+               gp.proposal_data["{{campaign_2_cost}}"] = campaign_2_cost
+               gp.proposal_data["{{campaign_2_per_cost}}"] = campaign_2_per_cost
+               gp.proposal_data["{{campaign_4_cost}}"] = campaign_4_cost
+               gp.proposal_data["{{campaign_4_per_cost}}"] = campaign_4_per_cost
+   
+               gp.proposal_data["{{target_ROI}}"] = f"${target_roi:.2f}"
+   
+               gp.target_segments.clear()
+               gp.target_segments.extend(selected_targets)
 
-            gp.proposal_data["{{total_targets_2}}"] = f"{total_targets * 2:,}"
-            gp.proposal_data["{{total_targets_4}}"] = f"{total_targets * 4:,}"
+               gp.credit_card_target_segments.clear()
+               gp.credit_card_target_segments.extend(selected_targets)
+   
+               gp.campaign_components.clear()
+               gp.campaign_components.extend(selected_components)
+   
+               import os
+               from datetime import datetime
+               
+               date_str = datetime.today().strftime("%Y%m%d")
+               
+               credit_union_clean = st.session_state.credit_union
+               proposal_name_clean = st.session_state.proposal_name
+               
+               file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.pptx"
+               
+               base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
+                   st.session_state.credit_union
+               )
+   
+               file_path = os.path.join(drafts_folder, file_name)
+   
+               one_time_campaign_cost = costs["campaign_1_calc"]
+   
+               if one_time_campaign_cost > 0:
+                   target_roi = estimated_first_year_interest / one_time_campaign_cost
+               else:
+                   target_roi = 0
+               
+               gp.proposal_data["{{target_ROI}}"] = f"${target_roi:.2f}"
+               
+               gp.proposal_data["{{total_targets_line}}"] = (
+                   f"Total Targets (de-duped by SSN): {total_targets:,}"
+               )
+   
+               if st.session_state.proposal_type == "Synergent Email Platform Proposal":
+                   tier_cost, tier_name = calculate_emp_tier_cost(
+                       st.session_state.total_subscribers
+                   )
+   
+                   if tier_cost is None:
+                       st.error("This subscriber count requires custom pricing.")
+                       st.stop()
+   
+                   gp.proposal_data["{{total_subscribers}}"] = f"{st.session_state.total_subscribers:,}"
+                   gp.proposal_data["{{tier_cost}}"] = f"${tier_cost:,.2f}"
+                   gp.proposal_data["{{essentials_cost}}"] = f"${tier_cost + 100:,.2f}"
+                   gp.proposal_data["{{premium_cost}}"] = f"${tier_cost + 200:,.2f}"
+                   gp.proposal_data["{{elite_cost}}"] = f"${tier_cost + 200:,.2f}"
+                   gp.proposal_data["{{emp_tier_number}}"] = tier_name.replace("Tier ", "")
+               
+               gp.main(output_path=file_path)
+   
+   
+               saved_data = collect_saved_data()
+               saved_data["file_path"] = file_path
+               st.session_state.file_path = file_path
+   
+               
+               proposal_id = save_proposal(
+                   st.session_state.get("current_proposal_id"),
+                   st.session_state.proposal_name,
+                   st.session_state.credit_union,
+                   st.session_state.proposal_type,
+                   st.session_state.proposal_status,
+                   saved_data,
+                   st.session_state.msr,
+                   st.session_state.current_user
+               )
+   
+               st.session_state.current_proposal_id = proposal_id
+   
+               st.success("Proposal generated successfully!")
+               st.caption(f"Saved to: {drafts_folder}")
 
-            gp.proposal_data["{{campaign_1_cost}}"] = campaign_1_cost
-            gp.proposal_data["{{campaign_2_cost}}"] = campaign_2_cost
-            gp.proposal_data["{{campaign_2_per_cost}}"] = campaign_2_per_cost
-            gp.proposal_data["{{campaign_4_cost}}"] = campaign_4_cost
-            gp.proposal_data["{{campaign_4_per_cost}}"] = campaign_4_per_cost
-
-            gp.proposal_data["{{target_ROI}}"] = f"${target_roi:.2f}"
-
-            gp.target_segments.clear()
-            gp.target_segments.extend(selected_targets)
-
-            gp.campaign_components.clear()
-            gp.campaign_components.extend(selected_components)
-
-            import os
-            from datetime import datetime
-            
-            date_str = datetime.today().strftime("%Y%m%d")
-            
-            credit_union_clean = st.session_state.credit_union
-            proposal_name_clean = st.session_state.proposal_name
-            
-            file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.pptx"
-            
-            base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
-                st.session_state.credit_union
-            )
-
-            file_path = os.path.join(drafts_folder, file_name)
-
-            one_time_campaign_cost = costs["campaign_1_calc"]
-
-            if one_time_campaign_cost > 0:
-                target_roi = estimated_first_year_interest / one_time_campaign_cost
-            else:
-                target_roi = 0
-            
-            gp.proposal_data["{{target_ROI}}"] = f"${target_roi:.2f}"
-            
-            gp.proposal_data["{{total_targets_line}}"] = (
-                f"Total Targets (de-duped by SSN): {total_targets:,}"
-            )
-
-            if st.session_state.proposal_type == "Synergent Email Platform Proposal":
-                tier_cost, tier_name = calculate_emp_tier_cost(
-                    st.session_state.total_subscribers
-                )
-
-                if tier_cost is None:
-                    st.error("This subscriber count requires custom pricing.")
-                    st.stop()
-
-                gp.proposal_data["{{total_subscribers}}"] = f"{st.session_state.total_subscribers:,}"
-                gp.proposal_data["{{tier_cost}}"] = f"${tier_cost:,.2f}"
-                gp.proposal_data["{{essentials_cost}}"] = f"${tier_cost + 100:,.2f}"
-                gp.proposal_data["{{premium_cost}}"] = f"${tier_cost + 200:,.2f}"
-                gp.proposal_data["{{elite_cost}}"] = f"${tier_cost + 200:,.2f}"
-                gp.proposal_data["{{emp_tier_number}}"] = tier_name.replace("Tier ", "")
-            
-            gp.main(output_path=file_path)
-
-
-            saved_data = collect_saved_data()
-            saved_data["file_path"] = file_path
-            st.session_state.file_path = file_path
-
-            
-            proposal_id = save_proposal(
-                st.session_state.get("current_proposal_id"),
-                st.session_state.proposal_name,
-                st.session_state.credit_union,
-                st.session_state.proposal_type,
-                st.session_state.proposal_status,
-                saved_data,
-                st.session_state.msr,
-                st.session_state.current_user
-            )
-
-            st.session_state.current_proposal_id = proposal_id
-
-            st.success("Proposal generated successfully!")
-            st.caption(f"Saved to: {drafts_folder}")
-
-            with open(file_path, "rb") as file:
-
-                from datetime import datetime
-
-                date_str = datetime.today().strftime("%Y%m%d")
-                
-                credit_union_clean = st.session_state.credit_union.replace(" ", " ")
-                proposal_name_clean = st.session_state.proposal_name.replace(" ", " ")
-                
-                file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.pptx"
-
-                st.download_button(
-                    label="Download Generated Proposal",
-                    data=file,
-                    file_name=file_name,
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                )
+       file_path = st.session_state.get("file_path")
+       if file_path and os.path.exists(file_path):
+          with open(file_path, "rb") as file:
+          
+              st.download_button(
+                  label="Download Generated Proposal",
+                  data=file,
+                  file_name=os.path.basename(file_path),
+                  mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                  key="download_generated_proposal"
+              )
 
     # -----------------------------
     # Sent Proposal Snapshot
     # -----------------------------
-    st.markdown("### Sent Proposal Snapshot")
-    
-    file_path = st.session_state.get("file_path")
-    
-    if file_path and os.path.exists(file_path):
-        st.info(f"Current generated proposal: {os.path.basename(file_path)}")
-    else:
-        st.warning("Generate the proposal before marking it as sent.")
-    
-    if st.button("Mark Current Proposal as Sent to Credit Union"):
-        file_path = st.session_state.get("file_path")
-    
-        if not file_path or not os.path.exists(file_path):
-            st.error("Generate the proposal before marking it as sent.")
-        else:
-            from datetime import datetime
-    
-            base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
-                st.session_state.credit_union
-            )
-    
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-            original_name = os.path.basename(file_path)
-            sent_file_name = original_name.replace(
-                ".pptx",
-                f" SENT {timestamp}.pptx"
-            )
-    
-            sent_file_path = os.path.join(sent_folder, sent_file_name)
-            st.session_state.sent_file_path = sent_file_path
-    
-            shutil.copy2(file_path, sent_file_path)
-            st.session_state.sent_file_path = sent_file_path
-            st.session_state.sent_at = timestamp
-            pricing_export_path = create_pricing_export_csv(pricing_folder)
-            st.session_state.pricing_export_path = pricing_export_path
-    
-            saved_data = collect_saved_data()
-            saved_data["file_path"] = file_path
-            saved_data["sent_file_path"] = sent_file_path
-            saved_data["sent_at"] = timestamp
-            saved_data["pricing_export_path"] = pricing_export_path
-    
-            st.session_state.proposal_status = "CU Review"
+    with st.expander("2. Send Snapshot", expanded=False):
+        if st.session_state.get("file_path"):
+           st.markdown("### Sent Proposal Snapshot")
+           
+           file_path = st.session_state.get("file_path")
+           
+           if file_path and os.path.exists(file_path):
+               st.info(f"Current generated proposal: {os.path.basename(file_path)}")
+           else:
+               st.warning("Generate the proposal before marking it as sent.")
+           
+           if st.button("Mark Current Proposal as Sent to Credit Union"):
+               file_path = st.session_state.get("file_path")
+           
+               if not file_path or not os.path.exists(file_path):
+                   st.error("Generate the proposal before marking it as sent.")
+               else:
+                   from datetime import datetime
+           
+                   base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
+                       st.session_state.credit_union
+                   )
+           
+                   timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+           
+                   original_name = os.path.basename(file_path)
+                   sent_file_name = original_name.replace(
+                       ".pptx",
+                       f" SENT {timestamp}.pptx"
+                   )
+           
+                   sent_file_path = os.path.join(sent_folder, sent_file_name)
+                   st.session_state.sent_file_path = sent_file_path
+           
+                   shutil.copy2(file_path, sent_file_path)
+                   st.session_state.sent_file_path = sent_file_path
+                   st.session_state.sent_at = timestamp
+                   pricing_export_path = create_pricing_export_csv(pricing_folder)
+                   st.session_state.pricing_export_path = pricing_export_path
+           
+                   saved_data = collect_saved_data()
+                   saved_data["file_path"] = file_path
+                   saved_data["sent_file_path"] = sent_file_path
+                   saved_data["sent_at"] = timestamp
+                   saved_data["pricing_export_path"] = pricing_export_path
+           
+                   st.session_state.proposal_status = "CU Review"
+       
+                   update_proposal_status(
+                       st.session_state.current_proposal_id,
+                       "CU Review"
+                   )
+           
+                   proposal_id = save_proposal(
+                       st.session_state.get("current_proposal_id"),
+                       st.session_state.proposal_name,
+                       st.session_state.credit_union,
+                       st.session_state.proposal_type,
+                       st.session_state.proposal_status,
+                       saved_data,
+                       st.session_state.msr,
+                       st.session_state.current_user
+                   )
+           
+                   st.session_state.current_proposal_id = proposal_id
+           
+                   st.success(f"Sent snapshot saved: {sent_file_name}") 
+                   if os.path.exists(sent_file_path):
+                       with open(sent_file_path, "rb") as file:
+                           st.download_button(
+                              label="Download Sent Proposal",
+                              data=file,
+                              file_name=os.path.basename(sent_file_path),
+                              mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                              key="download_sent"
+                           )
+                   if pricing_export_path and os.path.exists(pricing_export_path):
+                       with open(pricing_export_path, "rb") as file:
+                           st.download_button(
+                              label="Download Pricing Export",
+                              data=file,
+                              file_name=os.path.basename(pricing_export_path),
+                              mime="text/csv",
+                              key="download_pricing"
+                           )
+                   st.rerun()  
 
-            update_proposal_status(
-                st.session_state.current_proposal_id,
-                "CU Review"
-            )
-    
-            proposal_id = save_proposal(
-                st.session_state.get("current_proposal_id"),
-                st.session_state.proposal_name,
-                st.session_state.credit_union,
-                st.session_state.proposal_type,
-                st.session_state.proposal_status,
-                saved_data,
-                st.session_state.msr,
-                st.session_state.current_user
-            )
-    
-            st.session_state.current_proposal_id = proposal_id
-    
-            st.success(f"Sent snapshot saved: {sent_file_name}") 
-            if os.path.exists(sent_file_path):
-                with open(sent_file_path, "rb") as file:
-                    st.download_button(
-                       label="Download Sent Proposal",
-                       data=file,
-                       file_name=os.path.basename(sent_file_path),
-                       mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                       key="download_sent"
-                    )
-            if pricing_export_path and os.path.exists(pricing_export_path):
-                with open(pricing_export_path, "rb") as file:
-                    st.download_button(
-                       label="Download Pricing Export",
-                       data=file,
-                       file_name=os.path.basename(pricing_export_path),
-                       mime="text/csv",
-                       key="download_pricing"
-                    )
-            st.rerun()          
-    
     # -----------------------------
-    # Mark Sent Proposal as Signed
+    # PDF Export
     # -----------------------------
-    if st.button("Mark Sent Proposal as Signed"):
+    with st.expander("3. DocuSign Prep", expanded=False):
+        if st.session_state.get("sent_file_path"):
 
-        base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
-            st.session_state.credit_union
-        )
+            st.markdown("### PDF Export")
+            
+            if st.button("Create PDF from Sent Proposal"):
+            
+                sent_file_path = st.session_state.get("sent_file_path")
+            
+                if not sent_file_path or not os.path.exists(sent_file_path):
+                    st.error("Mark the proposal as sent first.")
+            
+                else:
+                    pdf_path = convert_pptx_to_pdf(sent_file_path)
+            
+                    st.session_state.sent_pdf_path = pdf_path
+            
+                    st.success("PDF created successfully.")
+            
+                    st.rerun()
+            
+            
+            sent_pdf_path = st.session_state.get("sent_pdf_path")
+            
+            if sent_pdf_path and os.path.exists(sent_pdf_path):
+            
+                with open(sent_pdf_path, "rb") as file:
+            
+                    st.download_button(
+                        label="Download Sent Proposal PDF",
+                        data=file,
+                        file_name=os.path.basename(sent_pdf_path),
+                        mime="application/pdf",
+                        key="download_sent_pdf"
+                    )  
+                     
     
-        sent_files = [
-            os.path.join(sent_folder, f)
-            for f in os.listdir(sent_folder)
-            if f.lower().endswith(".pptx")
-        ]
-    
-        if not sent_files:
-            st.error("No sent proposal snapshot found in the Sent folder.")
-        else:
-            # Get most recently created/modified sent proposal
-            latest_sent_file = max(sent_files, key=os.path.getmtime)
-    
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-            signed_file_name = os.path.basename(latest_sent_file).replace(
-                ".pptx",
-                f" SIGNED {timestamp}.pptx"
-            )
-    
-            signed_file_path = os.path.join(signed_folder, signed_file_name)
-
-            st.write("Latest sent file exists:", os.path.exists(latest_sent_file))
-            st.write("Copying from:", latest_sent_file)
-            st.write("Copying to:", signed_file_path)
-    
-            shutil.copy2(latest_sent_file, signed_file_path)
-    
-            st.session_state.proposal_status = "Signed"
-            st.session_state.signed_file_path = signed_file_path
-            st.session_state.signed_at = timestamp
-    
-            saved_data = collect_saved_data()
-            saved_data["sent_file_path"] = latest_sent_file
-            saved_data["signed_file_path"] = signed_file_path
-            saved_data["signed_at"] = timestamp
-    
-            proposal_id = save_proposal(
-                st.session_state.get("current_proposal_id"),
-                st.session_state.proposal_name,
-                st.session_state.credit_union,
-                st.session_state.proposal_type,
-                st.session_state.proposal_status,
-                saved_data,
-                st.session_state.msr,
-                st.session_state.current_user
-            )
-    
-            st.session_state.current_proposal_id = proposal_id
-    
-            st.success(f"Signed proposal snapshot saved: {signed_file_name}")
-            if os.path.exists(signed_file_path):
-               with open(signed_file_path, "rb") as file:
-                st.download_button(
-                    label="Download Signed Proposal",
-                    data=file,
-                    file_name=os.path.basename(signed_file_path),
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    key="download_signed"
+            # -----------------------------
+            # Mark Sent Proposal as Signed
+            # -----------------------------
+            if st.button("Mark Sent Proposal as Signed"):
+        
+                base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
+                    st.session_state.credit_union
                 )
+            
+                sent_files = [
+                    os.path.join(sent_folder, f)
+                    for f in os.listdir(sent_folder)
+                    if f.lower().endswith(".pptx")
+                ]
+            
+                if not sent_files:
+                    st.error("No sent proposal snapshot found in the Sent folder.")
+                else:
+                    # Get most recently created/modified sent proposal
+                    latest_sent_file = max(sent_files, key=os.path.getmtime)
+            
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+                    signed_file_name = os.path.basename(latest_sent_file).replace(
+                        ".pptx",
+                        f" SIGNED {timestamp}.pptx"
+                    )
+            
+                    signed_file_path = os.path.join(signed_folder, signed_file_name)
+        
+            
+                    shutil.copy2(latest_sent_file, signed_file_path)
+            
+                    st.session_state.proposal_status = "Signed"
+                    st.session_state.signed_file_path = signed_file_path
+                    st.session_state.signed_at = timestamp
+            
+                    saved_data = collect_saved_data()
+                    saved_data["sent_file_path"] = latest_sent_file
+                    saved_data["signed_file_path"] = signed_file_path
+                    saved_data["signed_at"] = timestamp
+            
+                    proposal_id = save_proposal(
+                        st.session_state.get("current_proposal_id"),
+                        st.session_state.proposal_name,
+                        st.session_state.credit_union,
+                        st.session_state.proposal_type,
+                        st.session_state.proposal_status,
+                        saved_data,
+                        st.session_state.msr,
+                        st.session_state.current_user
+                    )
+            
+                    st.session_state.current_proposal_id = proposal_id
+            
+                    st.success(f"Signed proposal snapshot saved: {signed_file_name}")
+                    if os.path.exists(signed_file_path):
+                       with open(signed_file_path, "rb") as file:
+                        st.download_button(
+                            label="Download Signed Proposal",
+                            data=file,
+                            file_name=os.path.basename(signed_file_path),
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            key="download_signed"
+                        )
+        else:
+             st.info("Mark proposal as sent to unlock PDF export and signing.")  
