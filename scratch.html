@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  #scratch-container {
+    position: relative;
+    width: 350px;
+    height: 250px;
+    margin: 0 auto;
+  }
+
+  #scratchCanvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+  }
+
+  #revealImage {
+    width: 100%;
+    height: 100%;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="scratch-container">
+  <canvas id="scratchCanvas" width="350" height="250"></canvas>
+  <img id="revealImage" src="https://assets.foleon.com/eu-central-1/de-uploads-7e3kk3/45198/prize.5ec378c0de0c.png">
+</div>
+
+<script>
+  const canvas = document.getElementById("scratchCanvas");
+  const ctx = canvas.getContext("2d");
+
+  const cover = new Image();
+  cover.src = "https://assets.foleon.com/eu-central-1/de-uploads-7e3kk3/45198/cover.569b524e4814.png";
+
+  cover.onload = () => {
+    ctx.drawImage(cover, 0, 0, canvas.width, canvas.height);
+  };
+
+  let isDrawing = false;
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+    return { x, y };
+  }
+
+  function scratch(e) {
+    if (!isDrawing) return;
+    const { x, y } = getPos(e);
+
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.beginPath();
+    ctx.arc(x, y, 25, 0, Math.PI * 2);
+    ctx.fill();
+
+    checkReveal();
+  }
+
+  function checkReveal() {
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let cleared = 0;
+
+    for (let i = 3; i < pixels.data.length; i += 4) {
+      if (pixels.data[i] === 0) cleared++;
+    }
+
+    const percent = cleared / (canvas.width * canvas.height) * 100;
+
+    if (percent > 60) {
+      revealPrize();
+    }
+  }
+
+  function revealPrize() {
+    const reveal = document.getElementById("revealImage");
+    reveal.style.display = "block";
+    canvas.style.display = "none";
+  }
+
+  canvas.addEventListener("mousedown", () => (isDrawing = true));
+  canvas.addEventListener("mouseup", () => (isDrawing = false));
+  canvas.addEventListener("mousemove", scratch);
+
+  canvas.addEventListener("touchstart", () => (isDrawing = true));
+  canvas.addEventListener("touchend", () => (isDrawing = false));
+  canvas.addEventListener("touchmove", scratch);
+</script>
+
+</body>
+</html>
