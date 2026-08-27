@@ -97,3 +97,8 @@ The current upgrade deliberately does not hard-code external database credential
 
 ### Future Option A
 - Persistence is isolated behind `database.py` and `file_storage.py`, so the later internal migration can replace Supabase with SQL Server and the internal network share without redesigning the proposal screens.
+
+
+## Compact timestamp display
+- Proposal Library and Admin Pricing History timestamps now display in Eastern Time as `M/D/YYYY h:mm AM/PM` (for example, `8/27/2026 6:36 PM`).
+- Supabase timestamps remain stored in UTC; this is a display-only conversion.

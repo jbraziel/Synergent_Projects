@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 import generate_proposal as gp
 from database import (
@@ -1011,6 +1012,33 @@ def format_date_windows(d):
     return d.strftime("%B %#d, %Y")
 
 
+def format_display_datetime(value):
+    """Display stored timestamps as compact Eastern Time without changing DB storage."""
+    if not value:
+        return ""
+
+    try:
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            text = str(value).strip()
+            # Supabase commonly returns ISO timestamps ending in Z or +00:00.
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+        eastern = ZoneInfo("America/New_York")
+        if dt.tzinfo is None:
+            # Legacy/local SQLite timestamps were written as local wall-clock time.
+            dt = dt.replace(tzinfo=eastern)
+        else:
+            dt = dt.astimezone(eastern)
+
+        time_text = dt.strftime("%I:%M %p").lstrip("0")
+        return f"{dt.month}/{dt.day}/{dt.year} {time_text}"
+    except (TypeError, ValueError):
+        # Never let an unexpected historical timestamp break the Proposal Library.
+        return str(value)
+
+
 def money(value):
     return f"${value:,.0f}"
 
@@ -1699,7 +1727,7 @@ if section == "Admin":
                         metadata_changes.append("activated" if bool(row.get("new_active")) else "deactivated")
 
                 st.markdown(f"**{label}** · {change_text}")
-                detail = f"Changed {row.get('changed_at', '')} by {row.get('changed_by', '')}{' · ' + unit if unit else ''}"
+                detail = f"Changed {format_display_datetime(row.get('changed_at', ''))} by {row.get('changed_by', '')}{' · ' + unit if unit else ''}"
                 if metadata_changes:
                     detail += " · " + ", ".join(metadata_changes)
                 st.caption(detail)
@@ -1852,7 +1880,7 @@ elif section == "Proposal Library":
                 st.write(display_msr or "")
 
             with col5:
-                st.caption(f"Last updated: {updated_at}")
+                st.caption(f"Last updated: {format_display_datetime(updated_at)}")
                 if display_updated_by:
                     st.caption(f"By: {display_updated_by}")
 
