@@ -3,9 +3,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 import time
+import os
 
 
-DB_NAME = Path(__file__).parent / "proposals.db"
+DB_NAME = Path(os.environ.get("PROPOSAL_DB_PATH", str(Path(__file__).parent / "proposals.db")))
+DB_NAME.parent.mkdir(parents=True, exist_ok=True)
 
 
 def get_connection():
@@ -38,6 +40,7 @@ def initialize_database():
     add_column_if_missing(cursor, "proposals", "updated_by", "TEXT")
     add_column_if_missing(cursor, "proposals", "locked_by", "TEXT")
     add_column_if_missing(cursor, "proposals", "locked_at", "TEXT")
+    add_column_if_missing(cursor, "proposals", "copied_from_proposal_id", "INTEGER")
     conn.commit()
     conn.close()
 
@@ -49,7 +52,7 @@ def add_column_if_missing(cursor, table, column, definition):
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
-def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, status, saved_data, msr="", updated_by=""):
+def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, status, saved_data, msr="", updated_by="", copied_from_proposal_id=None):
     import time
     import sqlite3
 
@@ -71,7 +74,8 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
                         status = ?,
                         updated_at = ?,
                         saved_data_json = ?,
-                        updated_by = ?
+                        updated_by = ?,
+                        copied_from_proposal_id = COALESCE(?, copied_from_proposal_id)
                     WHERE id = ?
                 """, (
                     proposal_name,
@@ -82,6 +86,7 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
                     now,
                     saved_json,
                     updated_by,
+                    copied_from_proposal_id,
                     proposal_id
                 ))
             else:
@@ -95,9 +100,10 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
                         created_at,
                         updated_at,
                         saved_data_json,
-                        updated_by
+                        updated_by,
+                        copied_from_proposal_id
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     proposal_name,
                     credit_union,
@@ -107,7 +113,8 @@ def save_proposal(proposal_id, proposal_name, credit_union, proposal_type, statu
                     now,
                     now,
                     saved_json,
-                    updated_by
+                    updated_by,
+                    copied_from_proposal_id
                 ))
 
                 proposal_id = cursor.lastrowid
