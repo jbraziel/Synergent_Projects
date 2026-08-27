@@ -195,15 +195,21 @@ st.markdown(
         justify-content: center !important;
     }
 
-    /* Proposal Library actions: keep Edit, Copy and Delete exactly the same width. */
+    /* Proposal Library action buttons use the same compact square treatment as file buttons. */
+    div[class*="st-key-open_"] div[data-testid="stButton"],
+    div[class*="st-key-duplicate_"] div[data-testid="stButton"],
+    div[class*="st-key-delete_"] div[data-testid="stButton"] {
+        width: 100% !important;
+    }
+
     div[class*="st-key-open_"] button,
     div[class*="st-key-duplicate_"] button,
     div[class*="st-key-delete_"] button {
         width: 100% !important;
         min-width: 0 !important;
-        padding-left: 0.30rem !important;
-        padding-right: 0.30rem !important;
+        padding: 0 !important;
         white-space: nowrap !important;
+        font-size: 16px !important;
     }
 
     /* Top sidebar navigation: compact, consistent, app-like. */
@@ -1959,7 +1965,7 @@ elif section == "Proposal Library":
         st.markdown("### Saved Proposals")
 
         h1, h2, h3, h4, h5, h6, h7 = st.columns(
-           [0.23, 0.15, 0.11, 0.09, 0.14, 0.15, 0.13]
+           [0.23, 0.15, 0.11, 0.09, 0.14, 0.14, 0.14]
         )
 
         with h1: st.markdown("<span style='font-size:15px; font-weight:700;'>Proposal</span>", unsafe_allow_html=True)
@@ -1974,7 +1980,7 @@ elif section == "Proposal Library":
 
         for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at in results:
             col1, col2, col3, col4, col5, col6, col7 = st.columns(
-                [0.23, 0.15, 0.11, 0.09, 0.14, 0.15, 0.13]
+                [0.23, 0.15, 0.11, 0.09, 0.14, 0.14, 0.14]
             )
 
             display_msr = canonical_msr_name(msr)
@@ -2052,14 +2058,15 @@ elif section == "Proposal Library":
                     st.caption(f"By: {display_updated_by}")
 
             with col6:
-                edit_col, copy_col, delete_col = st.columns(3)
+                # Match the Files controls: four equal slots with three compact icon buttons.
+                edit_col, copy_col, delete_col, _action_spacer = st.columns(4)
 
                 with edit_col:
                     if st.button(
-                        "Edit",
+                        "✎",
                         key=f"open_{proposal_id}",
                         type="secondary",
-                        help="Continue editing proposal",
+                        help="Edit proposal",
                         use_container_width=True,
                     ):
                         saved_data = load_proposal(proposal_id)
@@ -2073,9 +2080,9 @@ elif section == "Proposal Library":
 
                 with copy_col:
                     if st.button(
-                        "Copy",
+                        "⧉",
                         key=f"duplicate_{proposal_id}",
-                        help="Create a new draft from this proposal",
+                        help="Copy proposal",
                         use_container_width=True,
                     ):
                         new_id = duplicate_proposal(proposal_id)
@@ -2086,10 +2093,10 @@ elif section == "Proposal Library":
 
                 with delete_col:
                     if st.button(
-                        "Delete",
+                        "✕",
                         key=f"delete_{proposal_id}",
                         type="primary",
-                        help="Delete this proposal",
+                        help="Delete proposal",
                         use_container_width=True,
                     ):
                         confirm_delete_proposal(
