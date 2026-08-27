@@ -52,6 +52,20 @@ st.markdown(
        background-color: #e8f4df !important;
        border-color: #76bd22 !important;
     }
+
+    /* Make the active section completion control easy to spot. */
+    section[data-testid="stSidebar"] div[data-testid="stCheckbox"] {
+       background-color: white !important;
+       border: 1px solid #cfe3c3 !important;
+       border-left: 4px solid #76bd22 !important;
+       border-radius: 9px !important;
+       padding: 0.55rem 0.65rem !important;
+       margin: 0.15rem 0 0.55rem 0 !important;
+    }
+
+    section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label {
+       font-weight: 650 !important;
+    }
     
     div[data-testid="stHorizontalBlock"] {
         gap: 0.25rem !important;
@@ -144,6 +158,14 @@ st.markdown(
         background-color: #155a9c !important;
         color: white !important;
     }
+
+    /* Keep unavailable file placeholders aligned without looking active. */
+    div[data-testid="stButton"] button:disabled {
+        background-color: #e8ece6 !important;
+        color: #9aa397 !important;
+        opacity: 1 !important;
+        cursor: default !important;
+    }
     
     /* Small icon-style buttons */
     button[kind="secondary"],
@@ -169,6 +191,33 @@ TEMPLATE_MAP = {
     "Synergent Email Platform Proposal": "EMP_Proposal_Template.pptx",
     "General Lending Campaign": "Lending_Proposal_Template.pptx",
     "Credit Card Campaign": "Credit_Card_Proposal_Template.pptx",
+}
+
+# People who can use the proposal tool. Legacy aliases keep older saved
+# proposals compatible with the full-name display used in the UI.
+USER_OPTIONS = [
+    "Jen Braziel",
+    "Shannan Heacock",
+    "Erica Vachon",
+    "Melanie Moore",
+]
+
+USER_NAME_ALIASES = {
+    "Jen": "Jen Braziel",
+    "Shannan": "Shannan Heacock",
+    "Erica": "Erica Vachon",
+    "Jen Braziel": "Jen Braziel",
+    "Shannan Heacock": "Shannan Heacock",
+    "Erica Vachon": "Erica Vachon",
+    "Melanie Moore": "Melanie Moore",
+}
+
+MSR_OPTIONS = ["Shannan Heacock", "Erica Vachon"]
+MSR_LEGACY_ALIASES = {
+    "Shannan": "Shannan Heacock",
+    "Erica": "Erica Vachon",
+    "Shannan Heacock": "Shannan Heacock",
+    "Erica Vachon": "Erica Vachon",
 }
 
 DEFAULT_COMPONENTS = [
@@ -757,11 +806,23 @@ def clear_completion_widget_state():
             del st.session_state[key]
 
 
+def canonical_user_name(name):
+    return USER_NAME_ALIASES.get(name, name or "")
+
+
+def canonical_msr_name(name):
+    return MSR_LEGACY_ALIASES.get(name, name or "")
+
+
 def load_saved_data(data):
     clear_completion_widget_state()
     for key, value in data.items():
         if key == "proposal_date" and value:
             value = date.fromisoformat(value)
+        elif key in {"current_user", "updated_by", "locked_by"}:
+            value = canonical_user_name(value)
+        elif key == "msr":
+            value = canonical_msr_name(value)
         st.session_state[key] = value
 
 
@@ -1212,11 +1273,15 @@ with st.sidebar:
     if "current_user" not in st.session_state:
         st.session_state.current_user = ""
     
+    # Normalize legacy first-name values from existing browser sessions.
+    st.session_state.current_user = canonical_user_name(st.session_state.current_user)
+    user_options = [""] + USER_OPTIONS
+
     user = st.selectbox(
         "Who is using the proposal tool?",
-        ["", "Jen", "Erica", "Shannan", "Doug"],
-        index=["", "Jen", "Erica", "Shannan", "Doug"].index(st.session_state.current_user)
-        if st.session_state.current_user in ["", "Jen", "Erica", "Shannan", "Doug"]
+        user_options,
+        index=user_options.index(st.session_state.current_user)
+        if st.session_state.current_user in user_options
         else 0
     )
 
@@ -1243,53 +1308,13 @@ with st.sidebar:
 
     if st.session_state.active_section != "Proposal Library":
         proposal_id = st.session_state.get("current_proposal_id")
-        st.markdown("### Current Proposal")
-        if proposal_id:
-            st.caption(f"#{proposal_id} · {st.session_state.get('credit_union', '')}")
-        st.markdown(f"**{st.session_state.get('proposal_name', '')}**")
-        st.caption(f"{st.session_state.get('proposal_type', '')} · {st.session_state.get('proposal_status', 'Draft')}")
-
-        if st.session_state.get("copied_from_proposal_id"):
-            st.caption(f"Created from Proposal #{st.session_state.copied_from_proposal_id}")
-
-        if proposal_id and st.button("Close Proposal", key="close_current_proposal", use_container_width=True):
-            unlock_proposal(proposal_id, st.session_state.current_user)
-            st.session_state.current_proposal_id = None
-            st.session_state.active_section = "Proposal Library"
-            st.rerun()
-
-        st.markdown("---")
-        st.markdown("### Progress")
-
-        required_sections = get_required_sections()
-        completed_count = sum(
-            1 for sec in required_sections
-            if st.session_state.get(f"complete_{sec}", False)
-        )
-        total_required = len(required_sections)
-        progress = completed_count / total_required if total_required else 1.0
-        st.progress(progress)
-        st.caption(f"{completed_count} of {total_required} sections complete · {progress:.0%}")
-
-        if completed_count == total_required:
-            st.success("✅ Ready to Generate")
-
-        st.markdown("### Proposal Workflow")
-        for sec in get_workflow_sections():
-            selected = st.session_state.active_section == sec
-            if sec == "Generate Proposal":
-                icon = "🚀" if completed_count == total_required else "🔒"
-            else:
-                icon = "✅" if st.session_state.get(f"complete_{sec}", False) else "⬜"
-
-            label = f"{icon}  {'▶ ' if selected else ''}{sec}"
-            if st.button(label, key=f"nav_{sec}", use_container_width=True):
-                st.session_state.active_section = sec
-                st.rerun()
-
         active = st.session_state.active_section
+        required_sections = get_required_sections()
+
+        # Put the current section completion control first so it is easy to find.
         if active in required_sections:
-            st.markdown("---")
+            st.markdown("### Current Section")
+            st.caption(active)
             saved_key = f"complete_{active}"
             widget_key = f"sidebar_complete_{active}"
             if widget_key not in st.session_state:
@@ -1323,6 +1348,52 @@ with st.sidebar:
                 if st.button("Continue to Next Section →", key=f"continue_{active}", use_container_width=True):
                     go_to_next_section(active)
                     st.rerun()
+
+            st.markdown("---")
+
+        st.markdown("### Current Proposal")
+        if proposal_id:
+            st.caption(f"#{proposal_id} · {st.session_state.get('credit_union', '')}")
+        st.markdown(f"**{st.session_state.get('proposal_name', '')}**")
+        st.caption(f"{st.session_state.get('proposal_type', '')} · {st.session_state.get('proposal_status', 'Draft')}")
+
+        if st.session_state.get("copied_from_proposal_id"):
+            st.caption(f"Created from Proposal #{st.session_state.copied_from_proposal_id}")
+
+        st.markdown("---")
+        st.markdown("### Progress")
+
+        completed_count = sum(
+            1 for sec in required_sections
+            if st.session_state.get(f"complete_{sec}", False)
+        )
+        total_required = len(required_sections)
+        progress = completed_count / total_required if total_required else 1.0
+        st.progress(progress)
+        st.caption(f"{completed_count} of {total_required} sections complete · {progress:.0%}")
+
+        if completed_count == total_required:
+            st.success("✅ Ready to Generate")
+
+        st.markdown("### Proposal Workflow")
+        for sec in get_workflow_sections():
+            selected = st.session_state.active_section == sec
+            if sec == "Generate Proposal":
+                icon = "🚀" if completed_count == total_required else "🔒"
+            else:
+                icon = "✅" if st.session_state.get(f"complete_{sec}", False) else "⬜"
+
+            label = f"{icon}  {'▶ ' if selected else ''}{sec}"
+            if st.button(label, key=f"nav_{sec}", use_container_width=True):
+                st.session_state.active_section = sec
+                st.rerun()
+
+        st.markdown("---")
+        if proposal_id and st.button("Close Proposal", key="close_current_proposal", use_container_width=True):
+            unlock_proposal(proposal_id, st.session_state.current_user)
+            st.session_state.current_proposal_id = None
+            st.session_state.active_section = "Proposal Library"
+            st.rerun()
 
 section = st.session_state.active_section
 
@@ -1391,7 +1462,7 @@ if section == "Proposal Library":
     with col3:
         msr_filter = st.selectbox(
             "MSR",
-            ["All", "Shannan", "Erica"]
+            ["All"] + MSR_OPTIONS
         )
 
     results = search_proposals(search_text, status_filter, msr_filter)
@@ -1409,8 +1480,8 @@ if section == "Proposal Library":
     else:
         st.markdown("### Saved Proposals")
 
-        h1, h2, h3, h4, h5, h6, h7, h8 = st.columns(
-           [0.22, 0.16, 0.12, 0.09, 0.15, 0.06, 0.04, 0.16]
+        h1, h2, h3, h4, h5, h6, h7 = st.columns(
+           [0.255, 0.15, 0.11, 0.09, 0.15, 0.105, 0.14]
         )
 
         with h1: st.markdown("<span style='font-size:15px; font-weight:700;'>Proposal</span>", unsafe_allow_html=True)
@@ -1419,22 +1490,25 @@ if section == "Proposal Library":
         with h4: st.markdown("<span style='font-size:15px; font-weight:700;'>MSR</span>", unsafe_allow_html=True)
         with h5: st.markdown("<span style='font-size:15px; font-weight:700;'>Last Updated</span>", unsafe_allow_html=True)
         with h6: st.markdown("<span style='font-size:15px; font-weight:700;'>Actions</span>", unsafe_allow_html=True)
-        with h7: st.markdown("<span style='font-size:15px; font-weight:700;'></span>", unsafe_allow_html=True)
-        with h8: st.markdown("<span style='font-size:15px; font-weight:700;'>Downloads</span>", unsafe_allow_html=True)
+        with h7: st.markdown("<span style='font-size:15px; font-weight:700;'>Files</span>", unsafe_allow_html=True)
         
         st.markdown("---")
 
         for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at in results:
-            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(
-                [0.22, 0.16, 0.12, 0.09, 0.15, 0.06, 0.04, 0.16]
+            col1, col2, col3, col4, col5, col6, col7 = st.columns(
+                [0.255, 0.15, 0.11, 0.09, 0.15, 0.105, 0.14]
             )
+
+            display_msr = canonical_msr_name(msr)
+            display_updated_by = canonical_user_name(updated_by)
+            display_locked_by = canonical_user_name(locked_by)
 
             with col1:
                 st.write(f"**{proposal_name}**")
                 st.caption(f"Proposal #{proposal_id} · {proposal_type}")
                 
-                if locked_by and locked_by != st.session_state.current_user:
-                    st.caption(f"🔒 Editing: {locked_by}")
+                if display_locked_by and display_locked_by != st.session_state.current_user:
+                    st.caption(f"🔒 Editing: {display_locked_by}")
 
             with col2:
                 st.write(credit_union)
@@ -1458,7 +1532,7 @@ if section == "Proposal Library":
                      (status_options.index(current_status) + 1) % len(status_options)
                  ]
              
-                 pill_col, button_col = st.columns([0.60, 0.40])
+                 pill_col, button_col = st.columns([0.70, 0.30])
              
                  with pill_col:
                      st.markdown(
@@ -1468,10 +1542,10 @@ if section == "Proposal Library":
                              color:white;
                              border-radius:20px;
                              padding:4px 10px;
-                             font-size:15px;
+                             font-size:14px;
                              font-weight:700;
                              text-align:center;
-                             width:90px;
+                             width:82px;
                              line-height:18px;
                              margin-top:4px;
                          ">
@@ -1485,48 +1559,65 @@ if section == "Proposal Library":
                      if st.button(
                          "↻",
                          key=f"cycle_status_{proposal_id}_{current_status}",
-                         help=f"Change status to {next_status}"
+                         help=f"Change status to {next_status}",
+                         use_container_width=True,
                      ):
                          update_proposal_status(proposal_id, next_status)
                          st.rerun()
 
             with col4:
-                st.write(msr or "")
+                st.write(display_msr or "")
 
             with col5:
                 st.caption(f"Last updated: {updated_at}")
-                if updated_by:
-                    st.caption(f"By: {updated_by}")
+                if display_updated_by:
+                    st.caption(f"By: {display_updated_by}")
 
             with col6:
-                if st.button("EDIT", key=f"open_{proposal_id}", type="secondary", help="Continue editing proposal"):
-                    saved_data = load_proposal(proposal_id)
-                    if saved_data:
-                        reset_proposal_state()
-                        lock_proposal(proposal_id, st.session_state.current_user)
-                        load_saved_data(saved_data)
-                        st.session_state.current_proposal_id = proposal_id
-                        st.session_state.active_section = "Proposal Details"
-                        st.rerun()
+                edit_col, copy_col, delete_col = st.columns(3)
 
-                if st.button("COPY", key=f"duplicate_{proposal_id}", help="Create a new draft from this proposal"):
-                    new_id = duplicate_proposal(proposal_id)
-                    if new_id:
+                with edit_col:
+                    if st.button(
+                        "Edit",
+                        key=f"open_{proposal_id}",
+                        type="secondary",
+                        help="Continue editing proposal",
+                        use_container_width=True,
+                    ):
+                        saved_data = load_proposal(proposal_id)
+                        if saved_data:
+                            reset_proposal_state()
+                            lock_proposal(proposal_id, st.session_state.current_user)
+                            load_saved_data(saved_data)
+                            st.session_state.current_proposal_id = proposal_id
+                            st.session_state.active_section = "Proposal Details"
+                            st.rerun()
+
+                with copy_col:
+                    if st.button(
+                        "Copy",
+                        key=f"duplicate_{proposal_id}",
+                        help="Create a new draft from this proposal",
+                        use_container_width=True,
+                    ):
+                        new_id = duplicate_proposal(proposal_id)
+                        if new_id:
+                            st.rerun()
+                        else:
+                            st.error("Unable to copy this proposal.")
+
+                with delete_col:
+                    if st.button(
+                        "✕",
+                        key=f"delete_{proposal_id}",
+                        type="primary",
+                        help="Delete this proposal",
+                        use_container_width=True,
+                    ):
+                        delete_proposal(proposal_id)
                         st.rerun()
-                    else:
-                        st.error("Unable to copy this proposal.")
 
             with col7:
-                if st.button(
-                    "✕",
-                    key=f"delete_{proposal_id}",
-                    type="primary",
-                    help="Delete this Proposal"
-                ):
-                    delete_proposal(proposal_id)
-                    st.rerun()
-
-            with col8:
                 saved_data = load_proposal(proposal_id)
             
                 if isinstance(saved_data, str):
@@ -1548,8 +1639,11 @@ if section == "Proposal Library":
                                 file_name=os.path.basename(file_path),
                                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                                 key=f"draft_{proposal_id}",
-                                help="Download Draft"
+                                help="Download Draft",
+                                use_container_width=True,
                             )
+                    else:
+                        st.button("📄", key=f"draft_missing_{proposal_id}", disabled=True, help="Draft not generated yet", use_container_width=True)
 
                 with dl2:
                     if sent_file_path and os.path.exists(sent_file_path):
@@ -1560,8 +1654,11 @@ if section == "Proposal Library":
                                 file_name=os.path.basename(sent_file_path),
                                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                                 key=f"sent_{proposal_id}",
-                                help="Download Sent Proposal"
+                                help="Download Sent Proposal",
+                                use_container_width=True,
                             )
+                    else:
+                        st.button("📤", key=f"sent_missing_{proposal_id}", disabled=True, help="No sent version yet", use_container_width=True)
             
                 with dl3:
                     if signed_file_path and os.path.exists(signed_file_path):
@@ -1572,8 +1669,11 @@ if section == "Proposal Library":
                                 file_name=os.path.basename(signed_file_path),
                                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                                 key=f"signed_{proposal_id}",
-                                help="Download Signed Proposal"
+                                help="Download Signed Proposal",
+                                use_container_width=True,
                             )
+                    else:
+                        st.button("✅", key=f"signed_missing_{proposal_id}", disabled=True, help="No signed version yet", use_container_width=True)
             
                 with dl4:
                     if pricing_export_path and os.path.exists(pricing_export_path):
@@ -1584,8 +1684,11 @@ if section == "Proposal Library":
                                 file_name=os.path.basename(pricing_export_path),
                                 mime="text/csv",
                                 key=f"pricing_{proposal_id}",
-                                help="Download Pricing Export"
+                                help="Download Pricing Export",
+                                use_container_width=True,
                             )
+                    else:
+                        st.button("💲", key=f"pricing_missing_{proposal_id}", disabled=True, help="Pricing export not generated yet", use_container_width=True)
 
             st.markdown("<hr style='margin: 4px 0;'>", unsafe_allow_html=True)
 
@@ -1783,7 +1886,7 @@ elif section == "Proposal Details":
             st.session_state.proposal_date,
         )
 
-        options = ["Shannan", "Erica"]
+        options = MSR_OPTIONS
 
         st.session_state.msr = st.selectbox(
             "MSR",
@@ -2390,53 +2493,80 @@ elif section == "Generate Proposal":
     st.subheader("Generate Proposal")
 
     selected_template = TEMPLATE_MAP[st.session_state.proposal_type]
-    selected_components = get_selected_components()
-    if st.session_state.proposal_type == "Credit Card Campaign":
-       selected_targets = get_selected_credit_card_targets()
-    else:
-       selected_targets = get_selected_targets()
+    is_emp_proposal = st.session_state.proposal_type == "Synergent Email Platform Proposal"
 
-    total_targets = sum(count for count, _ in selected_targets)
-
-    conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
-    estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
-    amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
-    loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
-    estimated_first_year_interest = calculate_first_year_interest(
-        amount_refinanced,
-        loan_interest_rate_decimal,
-        st.session_state.loan_term_years,
-    )
-
-    costs = calculate_costs()
-
-    one_time_campaign_cost = costs["campaign_1_calc"]
-
-    if one_time_campaign_cost > 0:
-        target_roi = estimated_first_year_interest / one_time_campaign_cost
-    else:
+    # EMP proposals have their own subscriber/tier pricing model.  Do not let the
+    # default campaign-target and campaign-cost session state leak into the EMP
+    # review or generation workflow.
+    if is_emp_proposal:
+        selected_components = []
+        selected_targets = []
+        total_targets = 0
+        conversion_rate_decimal = 0
+        estimated_loans_refinanced = 0
+        amount_refinanced = 0
+        estimated_first_year_interest = 0
         target_roi = 0
+        costs = {
+            "campaign_1_calc": 0,
+            "campaign_2_calc": 0,
+            "campaign_2_per_calc": 0,
+            "campaign_4_calc": 0,
+            "campaign_4_per_calc": 0,
+        }
+        campaign_1_cost = ""
+        campaign_2_cost = ""
+        campaign_2_per_cost = ""
+        campaign_4_cost = ""
+        campaign_4_per_cost = ""
+    else:
+        selected_components = get_selected_components()
+        if st.session_state.proposal_type == "Credit Card Campaign":
+            selected_targets = get_selected_credit_card_targets()
+        else:
+            selected_targets = get_selected_targets()
 
-    campaign_1_cost = st.session_state.get(
-        "campaign_1_cost_override",
-        money(costs["campaign_1_calc"]),
-    )
-    campaign_2_cost = st.session_state.get(
-        "campaign_2_cost_override",
-        money(costs["campaign_2_calc"]),
-    )
-    campaign_2_per_cost = st.session_state.get(
-        "campaign_2_per_cost_override",
-        money(costs["campaign_2_per_calc"]),
-    )
-    campaign_4_cost = st.session_state.get(
-        "campaign_4_cost_override",
-        money(costs["campaign_4_calc"]),
-    )
-    campaign_4_per_cost = st.session_state.get(
-        "campaign_4_per_cost_override",
-        money(costs["campaign_4_per_calc"]),
-    )
+        total_targets = sum(count for count, _ in selected_targets)
+
+        conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
+        estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
+        amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
+        loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
+        estimated_first_year_interest = calculate_first_year_interest(
+            amount_refinanced,
+            loan_interest_rate_decimal,
+            st.session_state.loan_term_years,
+        )
+
+        costs = calculate_costs()
+
+        one_time_campaign_cost = costs["campaign_1_calc"]
+
+        if one_time_campaign_cost > 0:
+            target_roi = estimated_first_year_interest / one_time_campaign_cost
+        else:
+            target_roi = 0
+
+        campaign_1_cost = st.session_state.get(
+            "campaign_1_cost_override",
+            money(costs["campaign_1_calc"]),
+        )
+        campaign_2_cost = st.session_state.get(
+            "campaign_2_cost_override",
+            money(costs["campaign_2_calc"]),
+        )
+        campaign_2_per_cost = st.session_state.get(
+            "campaign_2_per_cost_override",
+            money(costs["campaign_2_per_calc"]),
+        )
+        campaign_4_cost = st.session_state.get(
+            "campaign_4_cost_override",
+            money(costs["campaign_4_calc"]),
+        )
+        campaign_4_per_cost = st.session_state.get(
+            "campaign_4_per_cost_override",
+            money(costs["campaign_4_per_calc"]),
+        )
 
     # -----------------------------
     # Completion check
@@ -2483,9 +2613,25 @@ elif section == "Generate Proposal":
     st.markdown("### Review Summary")
     st.write(f"Proposal Type: {st.session_state.proposal_type}")
     st.write(f"Credit Union: {st.session_state.credit_union}")
-    st.write(f"Total Targets: {total_targets:,}")
-    st.write(f"Calculated One-Campaign Cost: {money(costs['campaign_1_calc'])}")
-    st.write(f"Final One-Campaign Proposal Price: {campaign_1_cost}")
+
+    if is_emp_proposal:
+        tier_cost, tier_name = calculate_emp_tier_cost(st.session_state.total_subscribers)
+        st.write(f"Total Subscribers: {st.session_state.total_subscribers:,}")
+        st.write(f"Pricing Tier: {tier_name}")
+        if tier_cost is None:
+            st.write("Monthly Pricing: Custom pricing required")
+        else:
+            st.write(f"Base Monthly Cost: {money(tier_cost)}")
+            st.write(f"Essentials Monthly Cost: {money(tier_cost + 100)}")
+            st.write(f"Premium Monthly Cost: {money(tier_cost + 200)}")
+            st.write(f"Elite Monthly Cost: {money(tier_cost + 200)}")
+            st.caption(
+                "Implementation: Essentials $5,500 · Premium $8,000 · Elite $10,500"
+            )
+    else:
+        st.write(f"Total Targets: {total_targets:,}")
+        st.write(f"Calculated One-Campaign Cost: {money(costs['campaign_1_calc'])}")
+        st.write(f"Final One-Campaign Proposal Price: {campaign_1_cost}")
 
     # -----------------------------
     # Save Proposal
@@ -2529,14 +2675,30 @@ elif section == "Generate Proposal":
             f"{os.path.basename(st.session_state.file_path)}"
         )
        if generate_clicked:
-           if not selected_targets:
+           emp_tier_cost, _ = calculate_emp_tier_cost(st.session_state.total_subscribers) if is_emp_proposal else (0, "")
+           if not is_emp_proposal and not selected_targets:
                st.error("Please select at least one campaign target.")
-           elif not selected_components:
+           elif not is_emp_proposal and not selected_components:
                st.error("Please select at least one campaign component.")
+           elif is_emp_proposal and emp_tier_cost is None:
+               st.error("This subscriber count requires custom pricing.")
            elif not Path(selected_template).exists():
                st.error(f"Template file is missing: {selected_template}")
            else:
                gp.TEMPLATE_PATH = selected_template
+
+               # generate_proposal.py keeps proposal_data at module scope. Remove EMP-only
+               # keys before every run so generating an EMP cannot cause a later campaign
+               # proposal to be treated as an EMP proposal.
+               for emp_key in (
+                   "{{total_subscribers}}",
+                   "{{tier_cost}}",
+                   "{{essentials_cost}}",
+                   "{{premium_cost}}",
+                   "{{elite_cost}}",
+                   "{{emp_tier_number}}",
+               ):
+                   gp.proposal_data.pop(emp_key, None)
    
                gp.proposal_data["{{proposal_name}}"] = st.session_state.proposal_name
                gp.proposal_data["{{proposal_date}}"] = format_date_windows(

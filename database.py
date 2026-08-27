@@ -162,8 +162,19 @@ def search_proposals(search_text="", status_filter="All", msr_filter="All"):
         params.append(status_filter)
 
     if msr_filter != "All":
-        query += " AND msr = ?"
-        params.append(msr_filter)
+        # Keep filters compatible with proposals saved before the UI switched
+        # from first names to full names.
+        legacy_msr_names = {
+            "Shannan Heacock": "Shannan",
+            "Erica Vachon": "Erica",
+        }
+        legacy_name = legacy_msr_names.get(msr_filter)
+        if legacy_name:
+            query += " AND msr IN (?, ?)"
+            params.extend([msr_filter, legacy_name])
+        else:
+            query += " AND msr = ?"
+            params.append(msr_filter)
 
     query += " ORDER BY updated_at DESC"
 
