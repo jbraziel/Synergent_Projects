@@ -780,6 +780,21 @@ def lifecycle_filename(status, extension="pptx", source_ref=None):
     return f"{proposal_file_stem()}_{status.upper()}{version_suffix}.{extension}"
 
 
+def signed_pdf_filename(source_ref=None, existing_signed_ref=None):
+    """Return a short signed-PDF name, preserving replacement revisions instead of overwriting."""
+    version = extract_generation_version(source_ref or st.session_state.get("sent_file_path") or st.session_state.get("file_path"))
+    version_suffix = f"_v{version}" if version else ""
+    base = f"{proposal_file_stem()}_SIGNED{version_suffix}"
+
+    if not existing_signed_ref:
+        return f"{base}.pdf"
+
+    existing_name = display_name(existing_signed_ref)
+    revision_match = re.search(r"_r(\d+)\.pdf$", existing_name, re.IGNORECASE)
+    next_revision = int(revision_match.group(1)) + 1 if revision_match else 2
+    return f"{base}_r{next_revision}.pdf"
+
+
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
     
@@ -966,6 +981,8 @@ def collect_saved_data():
         "sent_at",
         "signed_file_path",
         "signed_at",
+        "signed_uploaded_by",
+        "signed_original_name",
         "pricing_export_path",
         "proposal_notes",
         "loan_type",
@@ -1276,6 +1293,8 @@ def init_state():
         "sent_at": "",
         "signed_file_path": "",
         "signed_at": "",
+        "signed_uploaded_by": "",
+        "signed_original_name": "",
         "pricing_export_path": "",
         "pricing_settings_snapshot": None,
     }
@@ -1335,6 +1354,8 @@ def duplicate_proposal(source_proposal_id):
         "sent_pdf_path": "",
         "signed_file_path": "",
         "signed_at": "",
+        "signed_uploaded_by": "",
+        "signed_original_name": "",
         "pricing_export_path": "",
         "copied_from_proposal_id": source_proposal_id,
         # A duplicate is a new proposal, so it starts on the current admin rate schedule.
@@ -2168,7 +2189,11 @@ elif section == "Proposal Library":
                             "✅",
                             data=read_bytes(signed_file_path),
                             file_name=display_name(signed_file_path),
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            mime=(
+                                "application/pdf"
+                                if display_name(signed_file_path).lower().endswith(".pdf")
+                                else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                            ),
                             key=f"signed_{proposal_id}",
                             help="Download Signed Proposal",
                             use_container_width=True,
@@ -3604,62 +3629,114 @@ elif section == "Generate Proposal":
                     )  
                      
     
-            # -----------------------------
-            # Mark Sent Proposal as Signed
-            # -----------------------------
-            if st.button("Mark Sent Proposal as Signed"):
-                sent_file_path = st.session_state.get("sent_file_path")
-
-                if not sent_file_path or not stored_file_exists(sent_file_path):
-                    st.error("No sent proposal snapshot is available.")
-                else:
-                    base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
-                        st.session_state.credit_union
-                    )
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    signed_file_name = lifecycle_filename("SIGNED", source_ref=sent_file_path)
-
-                    if cloud_file_mode():
-                        signed_file_path = copy_stored_file(
-                            sent_file_path,
-                            destination_object_path=make_object_path(
-                                st.session_state.credit_union, "Signed", signed_file_name
-                            ),
-                        )
-                    else:
-                        signed_local_path = os.path.join(signed_folder, signed_file_name)
-                        signed_file_path = copy_stored_file(
-                            sent_file_path, destination_local_path=signed_local_path
-                        )
-
-                    st.session_state.proposal_status = "Signed"
-                    st.session_state.signed_file_path = signed_file_path
-                    st.session_state.signed_at = timestamp
-
-                    saved_data = collect_saved_data()
-                    saved_data["sent_file_path"] = sent_file_path
-                    saved_data["signed_file_path"] = signed_file_path
-                    saved_data["signed_at"] = timestamp
-
-                    proposal_id = save_proposal(
-                        st.session_state.get("current_proposal_id"),
-                        st.session_state.proposal_name,
-                        st.session_state.credit_union,
-                        st.session_state.proposal_type,
-                        st.session_state.proposal_status,
-                        saved_data,
-                        st.session_state.msr,
-                        st.session_state.current_user
-                    )
-                    st.session_state.current_proposal_id = proposal_id
-
-                    st.success(f"Signed proposal snapshot saved: {signed_file_name}")
-                    st.download_button(
-                        label="Download Signed Proposal",
-                        data=read_bytes(signed_file_path),
-                        file_name=display_name(signed_file_path),
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        key="download_signed"
-                    )
         else:
-             st.info("Mark proposal as sent to unlock PDF export and signing.")  
+            st.info("Mark proposal as sent to unlock DocuSign preparation.")
+
+    # -----------------------------
+    # Final Signed Proposal
+    # -----------------------------
+    with st.expander("4. Final Signed Proposal", expanded=False):
+        sent_file_path = st.session_state.get("sent_file_path")
+        signed_file_path = st.session_state.get("signed_file_path")
+
+        if not sent_file_path or not stored_file_exists(sent_file_path):
+            st.info("Mark the proposal as sent before uploading the completed DocuSign PDF.")
+        else:
+            st.markdown("### Upload Completed DocuSign PDF")
+            st.caption(
+                "After the proposal has been completed in DocuSign, upload the final signed PDF here. "
+                "The Sent version remains on file separately."
+            )
+
+            if signed_file_path and stored_file_exists(signed_file_path):
+                st.success(f"Signed PDF on file: {display_name(signed_file_path)}")
+                signed_meta = []
+                if st.session_state.get("signed_at"):
+                    signed_meta.append(f"uploaded {format_display_datetime(st.session_state.signed_at)}")
+                if st.session_state.get("signed_uploaded_by"):
+                    signed_meta.append(f"by {st.session_state.signed_uploaded_by}")
+                if signed_meta:
+                    st.caption(" ".join(signed_meta))
+
+                st.download_button(
+                    label="Download Signed PDF",
+                    data=read_bytes(signed_file_path),
+                    file_name=display_name(signed_file_path),
+                    mime="application/pdf",
+                    key="download_existing_signed_pdf",
+                )
+
+                replace_signed = st.checkbox(
+                    "Replace the signed PDF already on file",
+                    value=False,
+                    key="replace_existing_signed_pdf",
+                    help="The replacement is saved as a new revision rather than overwriting the existing filename.",
+                )
+            else:
+                replace_signed = True
+
+            if replace_signed:
+                uploaded_signed_pdf = st.file_uploader(
+                    "Signed PDF",
+                    type=["pdf"],
+                    key="signed_pdf_uploader",
+                    help="Upload the completed PDF returned from DocuSign.",
+                )
+
+                confirm_signed = st.checkbox(
+                    "I confirm this is the completed signed proposal and should mark this proposal as Signed.",
+                    value=False,
+                    key="confirm_signed_pdf_upload",
+                )
+
+                upload_disabled = uploaded_signed_pdf is None or not confirm_signed
+                if st.button(
+                    "Upload & Mark Signed",
+                    key="upload_and_mark_signed",
+                    type="primary",
+                    disabled=upload_disabled,
+                ):
+                    pdf_bytes = uploaded_signed_pdf.getvalue()
+
+                    if not pdf_bytes.startswith(b"%PDF"):
+                        st.error("The uploaded file does not appear to be a valid PDF.")
+                    else:
+                        previous_signed_ref = st.session_state.get("signed_file_path")
+                        signed_name = signed_pdf_filename(
+                            source_ref=sent_file_path,
+                            existing_signed_ref=previous_signed_ref,
+                        )
+                        signed_object_path = make_object_path(
+                            st.session_state.credit_union,
+                            "Signed",
+                            signed_name,
+                        )
+
+                        stored_signed_ref = store_bytes(
+                            pdf_bytes,
+                            signed_object_path,
+                            content_type="application/pdf",
+                        )
+
+                        signed_timestamp = datetime.now(ZoneInfo("UTC")).isoformat()
+                        st.session_state.proposal_status = "Signed"
+                        st.session_state.signed_file_path = stored_signed_ref
+                        st.session_state.signed_at = signed_timestamp
+                        st.session_state.signed_uploaded_by = st.session_state.current_user
+                        st.session_state.signed_original_name = uploaded_signed_pdf.name
+
+                        proposal_id = save_proposal(
+                            st.session_state.get("current_proposal_id"),
+                            st.session_state.proposal_name,
+                            st.session_state.credit_union,
+                            st.session_state.proposal_type,
+                            "Signed",
+                            collect_saved_data(),
+                            st.session_state.msr,
+                            st.session_state.current_user,
+                        )
+                        st.session_state.current_proposal_id = proposal_id
+                        update_proposal_status(proposal_id, "Signed")
+
+                        st.success(f"Signed proposal saved: {signed_name}")
+                        st.rerun()
