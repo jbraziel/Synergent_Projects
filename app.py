@@ -8,6 +8,7 @@ import json
 import re
 import shutil
 import csv
+from copy import deepcopy
 
 
 st.set_page_config(page_title="Marketing Proposal Generator", layout="wide")
@@ -430,116 +431,144 @@ def load_credit_union_list():
         return []
 
 def create_pricing_export_csv(pricing_folder):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    """Create an auditable pricing detail export for the current proposal.
 
+    The export intentionally stores both calculated pricing and any manual proposal-price
+    overrides so the internal pricing record always reconciles to the PowerPoint.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"{timestamp} {clean_folder_name(st.session_state.credit_union)} Pricing Export.csv"
     export_path = os.path.join(pricing_folder, file_name)
 
-    rows = []
+    rows = [
+        ["Proposal ID", st.session_state.get("current_proposal_id") or ""],
+        ["Proposal Name", st.session_state.proposal_name],
+        ["Credit Union", st.session_state.credit_union],
+        ["Proposal Type", st.session_state.proposal_type],
+        ["Proposal Date", str(st.session_state.proposal_date)],
+        ["MSR", st.session_state.msr],
+        ["Prepared By", st.session_state.get("current_user", "")],
+        ["Copied From Proposal ID", st.session_state.get("copied_from_proposal_id") or ""],
+        [],
+        ["PROPOSAL NOTES", ""],
+        ["Notes", st.session_state.get("proposal_notes", "").strip() or "(none)"],
+        [],
+    ]
 
-    rows.append(["Proposal Name", st.session_state.proposal_name])
-    rows.append(["Credit Union", st.session_state.credit_union])
-    rows.append(["Proposal Type", st.session_state.proposal_type])
-    rows.append(["Proposal Date", str(st.session_state.proposal_date)])
-    rows.append(["MSR", st.session_state.msr])
-    rows.append([])
-    rows.append(["PROPOSAL NOTES", ""])
-
-    proposal_notes = st.session_state.get(
-       "proposal_notes",
-       ""
-    )  
-    if proposal_notes.strip():
-       rows.append(["Notes", proposal_notes])
+    if st.session_state.proposal_type == "Synergent Email Platform Proposal":
+        tier_cost, tier_name = calculate_emp_tier_cost(st.session_state.total_subscribers)
+        rows.extend([
+            ["EMP PRICING", ""],
+            ["Total Subscribers", st.session_state.total_subscribers],
+            ["Tier", tier_name],
+            ["Base Monthly Cost", tier_cost if tier_cost is not None else "Custom"],
+            ["Essentials Monthly Cost", tier_cost + 100 if tier_cost is not None else "Custom"],
+            ["Premium Monthly Cost", tier_cost + 200 if tier_cost is not None else "Custom"],
+            ["Elite Monthly Cost", tier_cost + 200 if tier_cost is not None else "Custom"],
+            ["Essentials Implementation", 5500],
+            ["Premium Implementation", 8000],
+            ["Elite Implementation", 10500],
+        ])
     else:
-       rows.append(["Notes", "(none)"])
-    rows.append([])
+        if st.session_state.proposal_type == "Credit Card Campaign":
+            selected_targets = get_selected_credit_card_targets()
+        else:
+            selected_targets = get_selected_targets()
 
-    if st.session_state.proposal_type == "Auto Loan Recapture Campaign":
-        selected_targets = get_selected_targets()
         selected_components = get_selected_components()
         total_targets = sum(count for count, _ in selected_targets)
-
-        conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
-        estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
-        amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
-        loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
-        estimated_first_year_interest = calculate_first_year_interest(
-            amount_refinanced,
-            loan_interest_rate_decimal,
-            st.session_state.loan_term_years,
-        )
-
         costs = calculate_costs()
 
-        rows.append(["AUTO LOAN RECAPTURE INPUTS", ""])
-        rows.append(["Target Conversion Rate", st.session_state.conversion_rate])
-        rows.append(["Average Auto Balance", st.session_state.avg_loan_balance])
-        rows.append(["Average Interest Rate", st.session_state.loan_interest_rate])
-        rows.append(["Average Term Years", st.session_state.loan_term_years])
-        rows.append(["Total Targets", total_targets])
-        rows.append(["Estimated Loans Refinanced", estimated_loans_refinanced])
-        rows.append(["Estimated Amount Refinanced", amount_refinanced])
-        rows.append(["Estimated First-Year Interest", estimated_first_year_interest])
-        rows.append([])
+        rows.extend([
+            ["CAMPAIGN INPUTS", ""],
+            ["Total Targets", total_targets],
+            ["Target Conversion Rate", st.session_state.conversion_rate],
+            ["Loan / Product Type", st.session_state.get("loan_type", "")],
+            ["Campaign Weeks", st.session_state.get("campaign_weeks", "")],
+        ])
 
+        if st.session_state.proposal_type == "Credit Card Campaign":
+            rows.extend([
+                ["Credit Card Goals", "; ".join(st.session_state.get("credit_card_goals", []))],
+                ["Average Credit Card Limit", st.session_state.get("avg_credit_card_limit", 0)],
+                ["Average Credit Card Rate", st.session_state.get("avg_credit_card_rate", "")],
+                ["Average Interchange Per Card", st.session_state.get("avg_interchange_per_card", 0)],
+            ])
+        else:
+            conversion_rate_decimal = parse_percent(st.session_state.conversion_rate)
+            estimated_loans_refinanced = round(total_targets * conversion_rate_decimal)
+            amount_refinanced = estimated_loans_refinanced * st.session_state.avg_loan_balance
+            loan_interest_rate_decimal = parse_percent(st.session_state.loan_interest_rate)
+            estimated_first_year_interest = calculate_first_year_interest(
+                amount_refinanced,
+                loan_interest_rate_decimal,
+                st.session_state.loan_term_years,
+            )
+            rows.extend([
+                ["Average Loan Balance", st.session_state.avg_loan_balance],
+                ["Average Interest Rate", st.session_state.loan_interest_rate],
+                ["Average Term Years", st.session_state.loan_term_years],
+                ["Estimated Conversions", estimated_loans_refinanced],
+                ["Estimated Amount Financed", amount_refinanced],
+                ["Estimated First-Year Interest", estimated_first_year_interest],
+            ])
+
+        rows.append([])
         rows.append(["TARGET SEGMENTS", "Count"])
         for count, description in selected_targets:
             rows.append([description, count])
-        rows.append([])
 
+        rows.append([])
         rows.append(["CAMPAIGN COMPONENTS", "Included"])
         for component in selected_components:
             rows.append([component, "Yes"])
-        rows.append([])
 
-        rows.append(["PRICING CALCULATION", "Amount"])
-        rows.append(["Creative Cost", costs["creative_cost"]])
-        rows.append(["Data Mining Cost", costs["data_mining_cost"]])
-        rows.append(["List Procurement Cost", costs["list_procurement_cost"]])
-        rows.append(["Print Cost", costs["print_cost"]])
-        rows.append(["Email Labor Cost", costs["email_labor_cost"]])
-        rows.append(["Email Send Cost", costs["email_send_cost"]])
-        rows.append(["Straight costs breakdown", "Amount", "Included"])
-        straight_cost_total_check = 0
+        rows.extend([
+            [],
+            ["PRICING INPUT DETAIL", "Included", "Quantity / Raw Cost", "Rate / Markup", "Calculated Cost"],
+            ["Creative Concept & Design", "Yes" if st.session_state.include_creative else "No", st.session_state.creative_hours, "$115/hour", costs["creative_cost"]],
+            ["Targeted Data Mining", "Yes" if st.session_state.include_data_mining else "No", st.session_state.data_mining_hours, "$200/hour", costs["data_mining_cost"]],
+            ["List Procurement", "Yes" if st.session_state.include_list_procurement else "No", st.session_state.list_procurement_raw, "35% markup", costs["list_procurement_cost"]],
+            ["Variable Print Production", "Yes" if st.session_state.include_print else "No", st.session_state.print_raw, "35% markup", costs["print_cost"]],
+            ["Email Development", "Yes" if st.session_state.include_email_labor else "No", st.session_state.email_hours, "$115/hour", costs["email_labor_cost"]],
+            ["Email Sends", "Yes" if st.session_state.include_email_sends else "No", st.session_state.email_send_count, "$100/send", costs["email_send_cost"]],
+            [],
+            ["STRAIGHT COSTS", "Amount", "Included"],
+        ])
+
         for name, amount in STRAIGHT_COST_ITEMS.items():
-            included = st.session_state.get(f"cost_{name}", True)
-            if included:
-                straight_cost_total_check += amount
-            rows.append([
-                name,
-                amount,
-                "Yes" if included else "No"
-            ])
-        rows.append(["Straight Cost Total", straight_cost_total_check, ""])
-        rows.append([])
+            rows.append([name, amount, "Yes" if st.session_state.get(f"cost_{name}", True) else "No"])
 
-        rows.append(["Custom Costs Total", costs["custom_costs_total"]])
-        rows.append(["One-Time Cost Total", costs["one_time_cost_total"]])
-        rows.append(["Repeating Cost Total", costs["repeating_cost_total"]])
-        rows.append(["1 Campaign Cost", costs["campaign_1_calc"]])
-        rows.append(["2 Campaigns Cost", costs["campaign_2_calc"]])
-        rows.append(["2 Campaigns Per Campaign", costs["campaign_2_per_calc"]])
-        rows.append(["4 Campaigns Cost", costs["campaign_4_calc"]])
-        rows.append(["4 Campaigns Per Campaign", costs["campaign_4_per_calc"]])
+        rows.extend([
+            ["Straight Cost Total", costs["straight_cost_total"], ""],
+            [],
+            ["CUSTOM COSTS", "Amount"],
+        ])
+        valid_custom_costs = [
+            item for item in st.session_state.get("custom_costs", [])
+            if item.get("name", "").strip() and float(item.get("amount", 0) or 0) > 0
+        ]
+        if valid_custom_costs:
+            for item in valid_custom_costs:
+                rows.append([item.get("name", "").strip(), item.get("amount", 0)])
+        else:
+            rows.append(["(none)", 0])
 
-    elif st.session_state.proposal_type == "Synergent Email Platform Proposal":
-        tier_cost, tier_name = calculate_emp_tier_cost(st.session_state.total_subscribers)
-
-        rows.append(["EMP INPUTS", ""])
-        rows.append(["Total Subscribers", st.session_state.total_subscribers])
-        rows.append(["Tier", tier_name])
-        rows.append(["Base Monthly Cost", tier_cost])
-        rows.append(["Essentials Monthly Cost", tier_cost + 100 if tier_cost else "Custom"])
-        rows.append(["Premium Monthly Cost", tier_cost + 200 if tier_cost else "Custom"])
-        rows.append(["Elite Monthly Cost", tier_cost + 200 if tier_cost else "Custom"])
-        rows.append(["Essentials Implementation", 5500])
-        rows.append(["Premium Implementation", 8000])
-        rows.append(["Elite Implementation", 10500])
+        rows.extend([
+            ["Custom Costs Total", costs["custom_costs_total"]],
+            [],
+            ["PRICING SUMMARY", "Calculated", "Final Proposal Price"],
+            ["One-Time Cost Total", costs["one_time_cost_total"], ""],
+            ["Repeating Cost Total", costs["repeating_cost_total"], ""],
+            ["1 Campaign", costs["campaign_1_calc"], st.session_state.get("campaign_1_cost_override", money(costs["campaign_1_calc"]))],
+            ["2 Campaigns Total", costs["campaign_2_calc"], st.session_state.get("campaign_2_cost_override", money(costs["campaign_2_calc"]))],
+            ["2 Campaigns Per Campaign", costs["campaign_2_per_calc"], st.session_state.get("campaign_2_per_cost_override", money(costs["campaign_2_per_calc"]))],
+            ["4 Campaigns Total", costs["campaign_4_calc"], st.session_state.get("campaign_4_cost_override", money(costs["campaign_4_calc"]))],
+            ["4 Campaigns Per Campaign", costs["campaign_4_per_calc"], st.session_state.get("campaign_4_per_cost_override", money(costs["campaign_4_per_calc"]))],
+        ])
 
     with open(export_path, "w", newline="", encoding="utf-8-sig") as file:
-        writer = csv.writer(file)
-        writer.writerows(rows)
+        csv.writer(file).writerows(rows)
 
     return export_path
 
@@ -551,7 +580,7 @@ def clean_folder_name(name):
 def get_credit_union_output_folder(credit_union):
     cu_folder = clean_folder_name(credit_union)
     
-    SHARED_ROOT = "generated_proposals"
+    SHARED_ROOT = os.environ.get("PROPOSAL_OUTPUT_ROOT", "generated_proposals")
     base_folder = os.path.join(SHARED_ROOT, cu_folder)
 
     drafts_folder = os.path.join(base_folder, "Drafts")
@@ -664,6 +693,13 @@ def collect_saved_data():
         "avg_credit_card_limit",
         "avg_credit_card_rate",
         "avg_interchange_per_card",
+        "total_subscribers",
+        "campaign_1_cost_override",
+        "campaign_2_cost_override",
+        "campaign_2_per_cost_override",
+        "campaign_4_cost_override",
+        "campaign_4_per_cost_override",
+        "copied_from_proposal_id",
     ]
 
     for key in keys_to_save:
@@ -714,59 +750,38 @@ def collect_saved_data():
     return data
 
 
+def clear_completion_widget_state():
+    """Clear widget mirrors so a newly loaded proposal displays its own completion state."""
+    for key in list(st.session_state.keys()):
+        if key.startswith("sidebar_complete_") or key.startswith("widget_complete_"):
+            del st.session_state[key]
+
+
 def load_saved_data(data):
+    clear_completion_widget_state()
     for key, value in data.items():
         if key == "proposal_date" and value:
             value = date.fromisoformat(value)
-
         st.session_state[key] = value
 
-def get_workflow_sections():
-    if st.session_state.proposal_type == "Synergent Email Platform Proposal":
-        return [
-            "Proposal Details",
-            "EMP Details",
-            "Generate Proposal",
-        ]
 
-    return [
-        "Proposal Details",
-        "Campaign Targets",
-        "Conversion Metrics",
-        "Campaign Components",
-        "Cost Estimator",
-        "Generate Proposal",
-    ]
+def get_workflow_sections():
+    return get_required_sections() + ["Generate Proposal"]
+
+
+def go_to_next_section(section_name):
+    sections = get_workflow_sections()
+    if section_name in sections:
+        current_index = sections.index(section_name)
+        if current_index + 1 < len(sections):
+            st.session_state.active_section = sections[current_index + 1]
 
 
 def section_complete_checkbox(section_name):
-    saved_key = f"complete_{section_name}"
-    widget_key = f"widget_{saved_key}"
+    """Section completion is managed in the persistent sidebar progress navigator."""
+    # Kept as a no-op so existing section calls remain simple and the page itself stays uncluttered.
+    return
 
-    if saved_key not in st.session_state:
-        st.session_state[saved_key] = False
-
-    st.markdown("### ✅ Section Completion")
-    st.info("Check this box when this section is complete. The app will automatically move you to the next step.")
-
-    checked = st.checkbox(
-        f"Mark {section_name} complete",
-        key=widget_key,
-        value=st.session_state[saved_key]
-    )
-
-    if checked and not st.session_state[saved_key]:
-        st.session_state[saved_key] = True
-
-        sections = get_workflow_sections()
-        current_index = sections.index(section_name)
-
-        if current_index + 1 < len(sections):
-            st.session_state.active_section = sections[current_index + 1]
-            st.rerun()
-
-    else:
-        st.session_state[saved_key] = checked
 
 def persistent_checkbox(label, saved_key, default=True):
     widget_key = f"widget_{saved_key}"
@@ -922,6 +937,13 @@ def init_state():
         "avg_credit_card_limit": 5000,
         "avg_credit_card_rate": "14.99%",
         "avg_interchange_per_card": 75,
+        "copied_from_proposal_id": None,
+        "file_path": "",
+        "sent_file_path": "",
+        "sent_at": "",
+        "signed_file_path": "",
+        "signed_at": "",
+        "pricing_export_path": "",
     }
 
     for key, value in defaults.items():
@@ -941,6 +963,80 @@ def init_state():
     for name in STRAIGHT_COST_ITEMS:
         if f"cost_{name}" not in st.session_state:
             st.session_state[f"cost_{name}"] = True
+
+
+def reset_proposal_state():
+    """Start with a genuinely clean proposal while preserving the selected user."""
+    current_user = st.session_state.get("current_user", "")
+    for key in list(st.session_state.keys()):
+        if key != "current_user":
+            del st.session_state[key]
+    init_state()
+    st.session_state.current_user = current_user
+    st.session_state.active_section = "Proposal Details"
+
+
+def duplicate_proposal(source_proposal_id):
+    """Create a new editable draft using another proposal as the starting point."""
+    source_data = load_proposal(source_proposal_id)
+    if not source_data:
+        return None
+
+    copied = deepcopy(source_data)
+    original_name = copied.get("proposal_name", "Proposal")
+
+    # Reset lifecycle/file fields. The new proposal shares inputs, not document history.
+    copied.update({
+        "current_proposal_id": None,
+        "proposal_status": "Draft",
+        "proposal_name": f"{original_name} - Copy",
+        "proposal_date": date.today().isoformat(),
+        "file_path": "",
+        "sent_file_path": "",
+        "sent_at": "",
+        "sent_pdf_path": "",
+        "signed_file_path": "",
+        "signed_at": "",
+        "pricing_export_path": "",
+        "copied_from_proposal_id": source_proposal_id,
+    })
+
+    for sec in ["Proposal Details", "Campaign Targets", "Conversion Metrics", "Campaign Components", "Cost Estimator", "EMP Details"]:
+        copied[f"complete_{sec}"] = False
+
+    reset_proposal_state()
+    load_saved_data(copied)
+    st.session_state.current_proposal_id = None
+    st.session_state.proposal_status = "Draft"
+    st.session_state.copied_from_proposal_id = source_proposal_id
+
+    new_id = save_proposal(
+        None,
+        st.session_state.proposal_name,
+        st.session_state.credit_union,
+        st.session_state.proposal_type,
+        "Draft",
+        collect_saved_data(),
+        st.session_state.msr,
+        st.session_state.current_user,
+        copied_from_proposal_id=source_proposal_id,
+    )
+    st.session_state.current_proposal_id = new_id
+    # Save once more so the JSON snapshot also contains its new ID.
+    save_proposal(
+        new_id,
+        st.session_state.proposal_name,
+        st.session_state.credit_union,
+        st.session_state.proposal_type,
+        "Draft",
+        collect_saved_data(),
+        st.session_state.msr,
+        st.session_state.current_user,
+        copied_from_proposal_id=source_proposal_id,
+    )
+    lock_proposal(new_id, st.session_state.current_user)
+    st.session_state.active_section = "Proposal Details"
+    return new_id
 
 
 def get_selected_targets():
@@ -1131,72 +1227,103 @@ with st.sidebar:
         st.warning("Please select your name to continue")
         st.stop()
 
-    st.caption(f"Editing: {st.session_state.proposal_name}")
-
     st.markdown("---")
 
-    if st.session_state.get("current_proposal_id"):
-       st.markdown("### Current Proposal")
-
-       st.caption(st.session_state.get("proposal_name", ""))
-
-    if st.button("Close Proposal"):
-        unlock_proposal(
-            st.session_state.current_proposal_id,
-            st.session_state.current_user
-        )
-
-        st.session_state.current_proposal_id = None
-        st.session_state.active_section = "Proposal Library"
-        st.rerun()
-
-    st.markdown("---")
-
-    if st.button("📁 Proposal Library", key="nav_library", use_container_width=True):
-        st.session_state.active_section = "Proposal Library"
-        st.rerun()
+    nav_col1, nav_col2 = st.columns(2)
+    with nav_col1:
+        if st.button("📁 Library", key="nav_library", use_container_width=True):
+            st.session_state.active_section = "Proposal Library"
+            st.rerun()
+    with nav_col2:
+        if st.button("➕ New", key="nav_new_proposal", use_container_width=True):
+            if st.session_state.get("current_proposal_id"):
+                unlock_proposal(st.session_state.current_proposal_id, st.session_state.current_user)
+            reset_proposal_state()
+            st.rerun()
 
     if st.session_state.active_section != "Proposal Library":
+        proposal_id = st.session_state.get("current_proposal_id")
+        st.markdown("### Current Proposal")
+        if proposal_id:
+            st.caption(f"#{proposal_id} · {st.session_state.get('credit_union', '')}")
+        st.markdown(f"**{st.session_state.get('proposal_name', '')}**")
+        st.caption(f"{st.session_state.get('proposal_type', '')} · {st.session_state.get('proposal_status', 'Draft')}")
+
+        if st.session_state.get("copied_from_proposal_id"):
+            st.caption(f"Created from Proposal #{st.session_state.copied_from_proposal_id}")
+
+        if proposal_id and st.button("Close Proposal", key="close_current_proposal", use_container_width=True):
+            unlock_proposal(proposal_id, st.session_state.current_user)
+            st.session_state.current_proposal_id = None
+            st.session_state.active_section = "Proposal Library"
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("### Progress")
+
+        required_sections = get_required_sections()
+        completed_count = sum(
+            1 for sec in required_sections
+            if st.session_state.get(f"complete_{sec}", False)
+        )
+        total_required = len(required_sections)
+        progress = completed_count / total_required if total_required else 1.0
+        st.progress(progress)
+        st.caption(f"{completed_count} of {total_required} sections complete · {progress:.0%}")
+
+        if completed_count == total_required:
+            st.success("✅ Ready to Generate")
+
         st.markdown("### Proposal Workflow")
-
-        if st.session_state.proposal_type == "Synergent Email Platform Proposal":
-           workflow_sections = [
-               "Proposal Details",
-               "EMP Details",
-               "Generate Proposal",
-            ]
-        else:
-            workflow_sections = [
-               "Proposal Details",
-               "Campaign Targets",
-               "Conversion Metrics",
-               "Campaign Components",
-               "Cost Estimator",
-               "Generate Proposal",
-            ]
-
-        for sec in workflow_sections:
+        for sec in get_workflow_sections():
             selected = st.session_state.active_section == sec
-
             if sec == "Generate Proposal":
-                icon = "🚀"
+                icon = "🚀" if completed_count == total_required else "🔒"
             else:
                 icon = "✅" if st.session_state.get(f"complete_{sec}", False) else "⬜"
 
-            col_icon, col_button = st.columns([0.18, 0.82])
+            label = f"{icon}  {'▶ ' if selected else ''}{sec}"
+            if st.button(label, key=f"nav_{sec}", use_container_width=True):
+                st.session_state.active_section = sec
+                st.rerun()
 
-            with col_icon:
-                st.markdown(
-                    f"<div style='font-size:20px; padding-top:8px; text-align:center;'>{icon}</div>",
-                    unsafe_allow_html=True
-                )
+        active = st.session_state.active_section
+        if active in required_sections:
+            st.markdown("---")
+            saved_key = f"complete_{active}"
+            widget_key = f"sidebar_complete_{active}"
+            if widget_key not in st.session_state:
+                st.session_state[widget_key] = st.session_state.get(saved_key, False)
 
-            with col_button:
-                label = f"▶ {sec}" if selected else sec
+            checked = st.checkbox(
+                f"Mark {active} complete",
+                key=widget_key,
+                help="This controls proposal progress and whether the proposal is ready to generate."
+            )
+            if checked != st.session_state.get(saved_key, False):
+                st.session_state[saved_key] = checked
+                if checked and not st.session_state.get("current_proposal_id"):
+                    new_id = save_proposal(
+                        None,
+                        st.session_state.proposal_name,
+                        st.session_state.credit_union,
+                        st.session_state.proposal_type,
+                        st.session_state.proposal_status,
+                        collect_saved_data(),
+                        st.session_state.msr,
+                        st.session_state.current_user,
+                        copied_from_proposal_id=st.session_state.get("copied_from_proposal_id"),
+                    )
+                    st.session_state.current_proposal_id = new_id
+                    lock_proposal(new_id, st.session_state.current_user)
+                elif st.session_state.get("current_proposal_id"):
+                    auto_save_proposal()
 
-                if st.button(label, key=f"nav_{sec}", use_container_width=True):
-                    st.session_state.active_section = sec
-                    
+            if checked:
+                if st.button("Continue to Next Section →", key=f"continue_{active}", use_container_width=True):
+                    go_to_next_section(active)
+                    st.rerun()
+
 section = st.session_state.active_section
 
 # -----------------------------
@@ -1222,22 +1349,8 @@ st.markdown(
 )
 
 # -----------------------------
-# Progress Bar
+# Progress is displayed persistently in the sidebar.
 # -----------------------------
-REQUIRED_SECTIONS = [
-    "Proposal Details",
-    "Campaign Targets",
-    "Conversion Metrics",
-    "Campaign Components",
-    "Cost Estimator",
-]
-
-completed_sections = [
-    sec for sec in REQUIRED_SECTIONS
-    if st.session_state.get(f"complete_{sec}", False)
-]
-
-
 
 # -----------------------------
 # Shared calculations
@@ -1285,17 +1398,8 @@ if section == "Proposal Library":
 
     st.markdown("### Start New Proposal")
 
-    if st.button("Create New Proposal", key="create_new_proposal"):
-        st.session_state.current_proposal_id = None
-        st.session_state.proposal_status = "Draft"
-        st.session_state["complete_EMP Details"] = False
-        st.session_state["widget_complete_EMP Details"] = False
-
-        for sec in REQUIRED_SECTIONS:
-            st.session_state[f"complete_{sec}"] = False
-            st.session_state[f"widget_complete_{sec}"] = False
-
-        st.session_state.active_section = "Proposal Details"
+    if st.button("➕ Create New Proposal", key="create_new_proposal", type="secondary"):
+        reset_proposal_state()
         st.rerun()
 
     st.markdown("---")
@@ -1327,6 +1431,7 @@ if section == "Proposal Library":
 
             with col1:
                 st.write(f"**{proposal_name}**")
+                st.caption(f"Proposal #{proposal_id} · {proposal_type}")
                 
                 if locked_by and locked_by != st.session_state.current_user:
                     st.caption(f"🔒 Editing: {locked_by}")
@@ -1396,14 +1501,20 @@ if section == "Proposal Library":
             with col6:
                 if st.button("EDIT", key=f"open_{proposal_id}", type="secondary", help="Continue editing proposal"):
                     saved_data = load_proposal(proposal_id)
-
                     if saved_data:
+                        reset_proposal_state()
                         lock_proposal(proposal_id, st.session_state.current_user)
-
                         load_saved_data(saved_data)
                         st.session_state.current_proposal_id = proposal_id
                         st.session_state.active_section = "Proposal Details"
                         st.rerun()
+
+                if st.button("COPY", key=f"duplicate_{proposal_id}", help="Create a new draft from this proposal"):
+                    new_id = duplicate_proposal(proposal_id)
+                    if new_id:
+                        st.rerun()
+                    else:
+                        st.error("Unable to copy this proposal.")
 
             with col7:
                 if st.button(
@@ -1483,6 +1594,8 @@ if section == "Proposal Library":
 # ============================================================
 elif section == "Proposal Details":
     st.subheader("Proposal Details")
+    if st.session_state.get("copied_from_proposal_id"):
+        st.info(f"This draft was created from Proposal #{st.session_state.copied_from_proposal_id}. Changes here will not affect the original proposal.")
     section_complete_checkbox("Proposal Details")
 
     previous_type = st.session_state.get("proposal_type")
@@ -2207,27 +2320,27 @@ elif section == "Cost Estimator":
     with col1:
         st.session_state.campaign_1_cost_override = st.text_input(
             "One Campaign Cost",
-            money(costs["campaign_1_calc"]),
+            value=st.session_state.get("campaign_1_cost_override", money(costs["campaign_1_calc"])),
         )
 
     with col2:
         st.session_state.campaign_2_cost_override = st.text_input(
             "Two Campaigns Total Cost",
-            money(costs["campaign_2_calc"]),
+            value=st.session_state.get("campaign_2_cost_override", money(costs["campaign_2_calc"])),
         )
         st.session_state.campaign_2_per_cost_override = st.text_input(
             "Two Campaigns Per Campaign Cost",
-            money(costs["campaign_2_per_calc"]),
+            value=st.session_state.get("campaign_2_per_cost_override", money(costs["campaign_2_per_calc"])),
         )
 
     with col3:
         st.session_state.campaign_4_cost_override = st.text_input(
             "Four Campaigns Total Cost",
-            money(costs["campaign_4_calc"]),
+            value=st.session_state.get("campaign_4_cost_override", money(costs["campaign_4_calc"])),
         )
         st.session_state.campaign_4_per_cost_override = st.text_input(
             "Four Campaigns Per Campaign Cost",
-            money(costs["campaign_4_per_calc"]),
+            value=st.session_state.get("campaign_4_per_cost_override", money(costs["campaign_4_per_calc"])),
         )
 
      
@@ -2371,7 +2484,8 @@ elif section == "Generate Proposal":
     st.write(f"Proposal Type: {st.session_state.proposal_type}")
     st.write(f"Credit Union: {st.session_state.credit_union}")
     st.write(f"Total Targets: {total_targets:,}")
-    st.write(f"One Campaign Cost: {money(costs['campaign_1_calc'])}")
+    st.write(f"Calculated One-Campaign Cost: {money(costs['campaign_1_calc'])}")
+    st.write(f"Final One-Campaign Proposal Price: {campaign_1_cost}")
 
     # -----------------------------
     # Save Proposal
@@ -2592,13 +2706,10 @@ elif section == "Generate Proposal":
                    gp.proposal_data["{{emp_tier_number}}"] = tier_name.replace("Tier ", "")
                
                gp.main(output_path=file_path)
-   
-   
-               saved_data = collect_saved_data()
-               saved_data["file_path"] = file_path
+
+               # Save the generated draft first so the pricing export can include a proposal ID.
                st.session_state.file_path = file_path
-   
-               
+               saved_data = collect_saved_data()
                proposal_id = save_proposal(
                    st.session_state.get("current_proposal_id"),
                    st.session_state.proposal_name,
@@ -2609,10 +2720,23 @@ elif section == "Generate Proposal":
                    st.session_state.msr,
                    st.session_state.current_user
                )
-   
                st.session_state.current_proposal_id = proposal_id
-   
-               st.success("Proposal generated successfully!")
+
+               # Pricing detail is a generation artifact, not a "mark sent" artifact.
+               pricing_export_path = create_pricing_export_csv(pricing_folder)
+               st.session_state.pricing_export_path = pricing_export_path
+               save_proposal(
+                   proposal_id,
+                   st.session_state.proposal_name,
+                   st.session_state.credit_union,
+                   st.session_state.proposal_type,
+                   st.session_state.proposal_status,
+                   collect_saved_data(),
+                   st.session_state.msr,
+                   st.session_state.current_user
+               )
+
+               st.success("Proposal and pricing detail generated successfully!")
                st.caption(f"Saved to: {drafts_folder}")
 
        file_path = st.session_state.get("file_path")
@@ -2626,6 +2750,17 @@ elif section == "Generate Proposal":
                   mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                   key="download_generated_proposal"
               )
+
+       pricing_export_path = st.session_state.get("pricing_export_path")
+       if pricing_export_path and os.path.exists(pricing_export_path):
+           with open(pricing_export_path, "rb") as file:
+               st.download_button(
+                   label="Download Pricing Detail",
+                   data=file,
+                   file_name=os.path.basename(pricing_export_path),
+                   mime="text/csv",
+                   key="download_generated_pricing"
+               )
 
     # -----------------------------
     # Sent Proposal Snapshot
@@ -2667,8 +2802,10 @@ elif section == "Generate Proposal":
                    shutil.copy2(file_path, sent_file_path)
                    st.session_state.sent_file_path = sent_file_path
                    st.session_state.sent_at = timestamp
-                   pricing_export_path = create_pricing_export_csv(pricing_folder)
-                   st.session_state.pricing_export_path = pricing_export_path
+                   pricing_export_path = st.session_state.get("pricing_export_path")
+                   if not pricing_export_path or not os.path.exists(pricing_export_path):
+                       pricing_export_path = create_pricing_export_csv(pricing_folder)
+                       st.session_state.pricing_export_path = pricing_export_path
            
                    saved_data = collect_saved_data()
                    saved_data["file_path"] = file_path
@@ -2715,7 +2852,6 @@ elif section == "Generate Proposal":
                               mime="text/csv",
                               key="download_pricing"
                            )
-                   st.rerun()  
 
     # -----------------------------
     # PDF Export
