@@ -136,8 +136,21 @@ def copy_stored_file(source_ref: str, destination_local_path: str | None = None,
         bucket, source_path = _parse_ref(source_ref)
         if not destination_object_path:
             raise ValueError("destination_object_path is required when copying a cloud file.")
+
+        # Supabase Storage's server-side copy operation can fail depending on the
+        # storage API/client version and will also fail when the destination object
+        # already exists.  For proposal lifecycle snapshots, reliability is more
+        # important than avoiding a small download/upload, so materialize the source
+        # bytes and upload the destination with upsert enabled.
         destination_object_path = destination_object_path.replace("\\", "/").lstrip("/")
-        _client().storage.from_(bucket).copy(source_path, destination_object_path)
+        client = _client()
+        data = client.storage.from_(bucket).download(source_path)
+        content_type = mimetypes.guess_type(destination_object_path)[0] or "application/octet-stream"
+        client.storage.from_(bucket).upload(
+            path=destination_object_path,
+            file=data,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
         return f"{CLOUD_PREFIX}{bucket}/{destination_object_path}"
 
     if destination_local_path:
