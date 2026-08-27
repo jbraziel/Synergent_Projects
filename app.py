@@ -195,21 +195,37 @@ st.markdown(
         justify-content: center !important;
     }
 
-    /* Proposal Library action buttons use the same compact square treatment as file buttons. */
+    /* Proposal Library action buttons: true full-width squares, matching the file buttons.
+       Streamlit may put the key class on the stButton wrapper itself OR on an ancestor,
+       so target both structures. */
+    div[class*="st-key-open_"][data-testid="stButton"],
+    div[class*="st-key-duplicate_"][data-testid="stButton"],
+    div[class*="st-key-delete_"][data-testid="stButton"],
     div[class*="st-key-open_"] div[data-testid="stButton"],
     div[class*="st-key-duplicate_"] div[data-testid="stButton"],
     div[class*="st-key-delete_"] div[data-testid="stButton"] {
         width: 100% !important;
+        min-width: 100% !important;
+        display: block !important;
     }
 
-    div[class*="st-key-open_"] button,
-    div[class*="st-key-duplicate_"] button,
-    div[class*="st-key-delete_"] button {
+    div[class*="st-key-open_"][data-testid="stButton"] button,
+    div[class*="st-key-duplicate_"][data-testid="stButton"] button,
+    div[class*="st-key-delete_"][data-testid="stButton"] button,
+    div[class*="st-key-open_"] div[data-testid="stButton"] button,
+    div[class*="st-key-duplicate_"] div[data-testid="stButton"] button,
+    div[class*="st-key-delete_"] div[data-testid="stButton"] button {
         width: 100% !important;
-        min-width: 0 !important;
+        min-width: 100% !important;
+        max-width: none !important;
+        height: 40px !important;
         padding: 0 !important;
+        margin: 0 !important;
         white-space: nowrap !important;
         font-size: 16px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 
     /* Top sidebar navigation: compact, consistent, app-like. */
