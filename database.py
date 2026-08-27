@@ -497,6 +497,33 @@ def get_pricing_history(limit=100):
     return rows
 
 
+def get_next_generation_version(proposal_id):
+    """Return the next human-friendly generated-file version number for a proposal."""
+    if not proposal_id:
+        return 1
+    if is_cloud_mode():
+        rows = (
+            _cloud_client()
+            .table("proposal_pricing_snapshots")
+            .select("id")
+            .eq("proposal_id", int(proposal_id))
+            .execute()
+            .data
+            or []
+        )
+        return len(rows) + 1
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM proposal_pricing_snapshots WHERE proposal_id = ?",
+        (int(proposal_id),),
+    )
+    count = int(cursor.fetchone()[0] or 0)
+    conn.close()
+    return count + 1
+
+
 def save_pricing_snapshot(proposal_id, pricing_data, generated_by):
     if not proposal_id:
         return None

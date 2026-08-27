@@ -102,3 +102,12 @@ The current upgrade deliberately does not hard-code external database credential
 ## Compact timestamp display
 - Proposal Library and Admin Pricing History timestamps now display in Eastern Time as `M/D/YYYY h:mm AM/PM` (for example, `8/27/2026 6:36 PM`).
 - Supabase timestamps remain stored in UTC; this is a display-only conversion.
+
+
+## Short filenames + equal library actions
+- New generated proposal files use `P<ID>_<CU>_<Type>_v<N>.pptx`.
+- Sent and signed artifacts use `_SENT_v<N>` and `_SIGNED_v<N>`.
+- Pricing exports use `P<ID>_Pricing_v<N>.csv`.
+- Proposal IDs are the primary unique identifier; filenames no longer repeat the full proposal title/date/time.
+- Existing stored files keep their existing names; the new convention applies to newly generated artifacts.
+- Proposal Library Edit, Copy, and Delete actions now use equal-width columns/buttons.

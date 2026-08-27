@@ -8,6 +8,7 @@ from database import (
     update_proposal_status, lock_proposal, unlock_proposal, get_pricing_snapshot,
     get_pricing_settings, update_pricing_setting, add_fixed_cost, get_pricing_history,
     save_pricing_snapshot, get_backend_status, get_default_pricing_snapshot,
+    get_next_generation_version,
 )
 from config import get_admin_users
 from file_storage import (
@@ -192,6 +193,82 @@ st.markdown(
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
+    }
+
+    /* Proposal Library actions: keep Edit, Copy and Delete exactly the same width. */
+    div[class*="st-key-open_"] button,
+    div[class*="st-key-duplicate_"] button,
+    div[class*="st-key-delete_"] button {
+        width: 100% !important;
+        min-width: 0 !important;
+        padding-left: 0.30rem !important;
+        padding-right: 0.30rem !important;
+        white-space: nowrap !important;
+    }
+
+    /* Top sidebar navigation: compact, consistent, app-like. */
+    .sidebar-nav-label {
+        color: #73806f;
+        font-size: 10px;
+        font-weight: 750;
+        letter-spacing: 0.10em;
+        margin: -0.05rem 0 0.30rem 0.10rem;
+    }
+
+    section[data-testid="stSidebar"] div[class*="st-key-nav_library"] button,
+    section[data-testid="stSidebar"] div[class*="st-key-nav_new_proposal"] button,
+    section[data-testid="stSidebar"] div[class*="st-key-nav_admin"] button {
+        height: 36px !important;
+        min-height: 36px !important;
+        padding: 0 0.30rem !important;
+        margin: 0 !important;
+        border-radius: 9px !important;
+        border: 1px solid #cbdcc2 !important;
+        background: #ffffff !important;
+        color: #3f4c3b !important;
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        line-height: 1 !important;
+        box-shadow: 0 1px 2px rgba(47, 58, 47, 0.06) !important;
+        white-space: nowrap !important;
+    }
+
+    section[data-testid="stSidebar"] div[class*="st-key-nav_library"] button:hover,
+    section[data-testid="stSidebar"] div[class*="st-key-nav_admin"] button:hover {
+        background: #f3f9ef !important;
+        border-color: #76bd22 !important;
+        color: #4d8518 !important;
+        box-shadow: 0 2px 5px rgba(72, 105, 50, 0.10) !important;
+    }
+
+    /* Current navigation destination. */
+    section[data-testid="stSidebar"] div[class*="st-key-nav_library"] button[kind="primary"],
+    section[data-testid="stSidebar"] div[class*="st-key-nav_admin"] button[kind="primary"] {
+        background: #76bd22 !important;
+        border-color: #76bd22 !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 5px rgba(82, 132, 26, 0.18) !important;
+    }
+
+    section[data-testid="stSidebar"] div[class*="st-key-nav_library"] button[kind="primary"]:hover,
+    section[data-testid="stSidebar"] div[class*="st-key-nav_admin"] button[kind="primary"]:hover {
+        background: #65a91d !important;
+        border-color: #65a91d !important;
+        color: #ffffff !important;
+    }
+
+    /* New is an action, not a destination: keep it distinct but restrained. */
+    section[data-testid="stSidebar"] div[class*="st-key-nav_new_proposal"] button {
+        background: #edf7e6 !important;
+        border-color: #a9cf8f !important;
+        color: #4f851c !important;
+    }
+
+    section[data-testid="stSidebar"] div[class*="st-key-nav_new_proposal"] button:hover {
+        background: #76bd22 !important;
+        border-color: #76bd22 !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 5px rgba(82, 132, 26, 0.18) !important;
     }
 </style>
     """,
@@ -494,8 +571,10 @@ def create_pricing_export_csv(pricing_folder):
     The export intentionally stores both calculated pricing and any manual proposal-price
     overrides so the internal pricing record always reconciles to the PowerPoint.
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_name = f"{timestamp} {clean_folder_name(st.session_state.credit_union)} Pricing Export.csv"
+    proposal_id = st.session_state.get("current_proposal_id") or "NEW"
+    version = extract_generation_version(st.session_state.get("file_path"))
+    version_suffix = f"_v{version}" if version else ""
+    file_name = f"P{proposal_id}_Pricing{version_suffix}.csv"
     export_path = os.path.join(pricing_folder, file_name)
 
     rows = [
@@ -637,6 +716,46 @@ def create_pricing_export_csv(pricing_folder):
 def clean_folder_name(name):
     name = re.sub(r'[<>:"/\\|?*]', "", name)
     return name.strip()
+
+
+PROPOSAL_TYPE_FILE_LABELS = {
+    "Auto Loan Recapture Campaign": "AutoLoan",
+    "General Lending Campaign": "GeneralLending",
+    "Credit Card Campaign": "CreditCard",
+    "Synergent Email Platform Proposal": "EMP",
+}
+
+
+def filename_token(value, max_length=24):
+    """Create a short, filesystem-safe identifier for human-readable filenames."""
+    value = str(value or "").strip()
+    value = re.sub(r"(?i)\bFederal Credit Union\b", "", value)
+    value = re.sub(r"(?i)\bCredit Union\b", "", value)
+    value = re.sub(r"(?i)\bFederal CU\b", "", value)
+    value = value.replace("&", "")
+    token = re.sub(r"[^A-Za-z0-9]+", "", value)
+    return (token or "CU")[:max_length]
+
+
+def proposal_file_stem(proposal_id=None):
+    proposal_id = proposal_id or st.session_state.get("current_proposal_id") or "NEW"
+    cu = filename_token(st.session_state.get("credit_union", "CU"))
+    proposal_type = st.session_state.get("proposal_type", "Proposal")
+    type_token = PROPOSAL_TYPE_FILE_LABELS.get(proposal_type, filename_token(proposal_type, 20))
+    return f"P{proposal_id}_{cu}_{type_token}"
+
+
+def extract_generation_version(file_ref):
+    if not file_ref:
+        return None
+    match = re.search(r"(?:_|\b)v(\d+)(?:\.[^.]+)$", display_name(file_ref), re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def lifecycle_filename(status, extension="pptx", source_ref=None):
+    version = extract_generation_version(source_ref or st.session_state.get("file_path"))
+    version_suffix = f"_v{version}" if version else ""
+    return f"{proposal_file_stem()}_{status.upper()}{version_suffix}.{extension}"
 
 
 def get_credit_union_output_folder(credit_union):
@@ -1417,20 +1536,38 @@ with st.sidebar:
     st.markdown("---")
 
     is_admin_user = st.session_state.current_user in ADMIN_USERS
-    nav_cols = st.columns(3 if is_admin_user else 2)
+    st.markdown('<div class="sidebar-nav-label">NAVIGATION</div>', unsafe_allow_html=True)
+    nav_cols = st.columns(3 if is_admin_user else 2, gap="small")
     with nav_cols[0]:
-        if st.button("📁 Library", key="nav_library", use_container_width=True):
+        if st.button(
+            "Library",
+            key="nav_library",
+            use_container_width=True,
+            type="primary" if st.session_state.active_section == "Proposal Library" else "secondary",
+            help="Open the Proposal Library",
+        ):
             st.session_state.active_section = "Proposal Library"
             st.rerun()
     with nav_cols[1]:
-        if st.button("➕ New", key="nav_new_proposal", use_container_width=True):
+        if st.button(
+            "+ New",
+            key="nav_new_proposal",
+            use_container_width=True,
+            help="Start a new proposal",
+        ):
             if st.session_state.get("current_proposal_id"):
                 unlock_proposal(st.session_state.current_proposal_id, st.session_state.current_user)
             reset_proposal_state()
             st.rerun()
     if is_admin_user:
         with nav_cols[2]:
-            if st.button("⚙️ Admin", key="nav_admin", use_container_width=True):
+            if st.button(
+                "Admin",
+                key="nav_admin",
+                use_container_width=True,
+                type="primary" if st.session_state.active_section == "Admin" else "secondary",
+                help="Open pricing and configuration administration",
+            ):
                 if st.session_state.get("current_proposal_id"):
                     auto_save_proposal()
                     unlock_proposal(st.session_state.current_proposal_id, st.session_state.current_user)
@@ -1573,6 +1710,36 @@ estimated_first_year_interest = calculate_first_year_interest(
 )
 
 costs = calculate_costs()
+
+# ============================================================
+# Delete confirmation dialog
+# ============================================================
+@st.dialog("Confirm Delete")
+def confirm_delete_proposal(proposal_id, proposal_name, credit_union):
+    st.markdown(f"**{proposal_name}**")
+    st.caption(f"Proposal #{proposal_id} · {credit_union}")
+    st.warning("This will permanently remove this proposal from the Proposal Library. This action cannot be undone.")
+
+    cancel_col, confirm_col = st.columns(2)
+
+    with cancel_col:
+        if st.button(
+            "Cancel",
+            key=f"cancel_delete_{proposal_id}",
+            use_container_width=True,
+        ):
+            st.rerun()
+
+    with confirm_col:
+        if st.button(
+            "Delete Proposal",
+            key=f"confirm_delete_{proposal_id}",
+            type="primary",
+            use_container_width=True,
+        ):
+            delete_proposal(proposal_id)
+            st.rerun()
+
 
 # ============================================================
 # Admin
@@ -1792,7 +1959,7 @@ elif section == "Proposal Library":
         st.markdown("### Saved Proposals")
 
         h1, h2, h3, h4, h5, h6, h7 = st.columns(
-           [0.255, 0.15, 0.11, 0.09, 0.15, 0.105, 0.14]
+           [0.23, 0.15, 0.11, 0.09, 0.14, 0.15, 0.13]
         )
 
         with h1: st.markdown("<span style='font-size:15px; font-weight:700;'>Proposal</span>", unsafe_allow_html=True)
@@ -1807,7 +1974,7 @@ elif section == "Proposal Library":
 
         for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at in results:
             col1, col2, col3, col4, col5, col6, col7 = st.columns(
-                [0.255, 0.15, 0.11, 0.09, 0.15, 0.105, 0.14]
+                [0.23, 0.15, 0.11, 0.09, 0.14, 0.15, 0.13]
             )
 
             display_msr = canonical_msr_name(msr)
@@ -1919,14 +2086,17 @@ elif section == "Proposal Library":
 
                 with delete_col:
                     if st.button(
-                        "✕",
+                        "Delete",
                         key=f"delete_{proposal_id}",
                         type="primary",
                         help="Delete this proposal",
                         use_container_width=True,
                     ):
-                        delete_proposal(proposal_id)
-                        st.rerun()
+                        confirm_delete_proposal(
+                            proposal_id,
+                            proposal_name,
+                            credit_union,
+                        )
 
             with col7:
                 saved_data = load_proposal(proposal_id)
@@ -3135,18 +3305,25 @@ elif section == "Generate Proposal":
                gp.campaign_components.clear()
                gp.campaign_components.extend(selected_components)
    
-               import os
-               from datetime import datetime
-               
-               now_for_file = datetime.today()
-               date_str = now_for_file.strftime("%Y%m%d")
-               version_str = now_for_file.strftime("%H%M%S")
-               
-               credit_union_clean = st.session_state.credit_union
-               proposal_name_clean = st.session_state.proposal_name
-               
-               # Keep every generated version instead of overwriting another generation from the same day.
-               file_name = f"{date_str} {credit_union_clean} {proposal_name_clean} v{version_str}.pptx"
+               # A short filename only needs the proposal ID, CU, type and generation version.
+               # Save first if needed so every generated file always has a real proposal ID.
+               if not st.session_state.get("current_proposal_id"):
+                   proposal_id = save_proposal(
+                       None,
+                       st.session_state.proposal_name,
+                       st.session_state.credit_union,
+                       st.session_state.proposal_type,
+                       st.session_state.proposal_status,
+                       collect_saved_data(),
+                       st.session_state.msr,
+                       st.session_state.current_user,
+                   )
+                   st.session_state.current_proposal_id = proposal_id
+               else:
+                   proposal_id = st.session_state.current_proposal_id
+
+               generation_version = get_next_generation_version(proposal_id)
+               file_name = f"{proposal_file_stem(proposal_id)}_v{generation_version}.pptx"
                
                base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
                    st.session_state.credit_union
@@ -3290,12 +3467,7 @@ elif section == "Generate Proposal":
                    )
            
                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-           
-                   original_name = display_name(file_path)
-                   sent_file_name = original_name.replace(
-                       ".pptx",
-                       f" SENT {timestamp}.pptx"
-                   )
+                   sent_file_name = lifecycle_filename("SENT", source_ref=file_path)
 
                    if cloud_file_mode():
                        sent_file_path = copy_stored_file(
@@ -3422,9 +3594,7 @@ elif section == "Generate Proposal":
                         st.session_state.credit_union
                     )
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    signed_file_name = display_name(sent_file_path).replace(
-                        ".pptx", f" SIGNED {timestamp}.pptx"
-                    )
+                    signed_file_name = lifecycle_filename("SIGNED", source_ref=sent_file_path)
 
                     if cloud_file_mode():
                         signed_file_path = copy_stored_file(
