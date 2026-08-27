@@ -2,7 +2,17 @@ import streamlit as st
 from datetime import date, datetime
 from pathlib import Path
 import generate_proposal as gp
-from database import initialize_database, save_proposal, search_proposals, load_proposal, delete_proposal, update_proposal_status, lock_proposal, unlock_proposal
+from database import (
+    initialize_database, save_proposal, search_proposals, load_proposal, delete_proposal,
+    update_proposal_status, lock_proposal, unlock_proposal, get_pricing_snapshot,
+    get_pricing_settings, update_pricing_setting, add_fixed_cost, get_pricing_history,
+    save_pricing_snapshot, get_backend_status, get_default_pricing_snapshot,
+)
+from config import get_admin_users
+from file_storage import (
+    store_file, store_bytes, read_bytes, stored_file_exists, display_name,
+    copy_stored_file, make_object_path, get_storage_status, is_cloud_mode as cloud_file_mode,
+)
 import os
 import json
 import re
@@ -13,7 +23,12 @@ from copy import deepcopy
 
 st.set_page_config(page_title="Marketing Proposal Generator", layout="wide")
 
-initialize_database()
+try:
+    initialize_database()
+except RuntimeError as exc:
+    st.error(str(exc))
+    st.stop()
+
 
 
 # -----------------------------
@@ -220,6 +235,8 @@ MSR_LEGACY_ALIASES = {
     "Erica Vachon": "Erica Vachon",
 }
 
+ADMIN_USERS = get_admin_users()
+
 DEFAULT_COMPONENTS = [
     "Creative concept, strategy and design",
     "Preliminary data analysis",
@@ -248,17 +265,8 @@ DEFAULT_TARGET_OPTIONS = [
     (425, "members with strong product engagement and lending opportunity"),
 ]
 
-STRAIGHT_COST_ITEMS = {
-    "Preliminary Data Analysis": 100,
-    "Strategy & Concept": 300,
-    "Copy Writing": 100,
-    "Unique URL": 150,
-    "Tracking, Monitoring & Reporting": 100,
-    "Campaign Management": 100,
-    "Consultative Implementation": 500,
-    "QR Code": 100,
-    "ACH Program Fee": 2500,
-}
+# Fixed costs are now database-backed and administered from the Admin area.
+# Their labels/amounts are read from each proposal's frozen pricing schedule.
 
 REQUIRED_SECTIONS = [
     "Proposal Details",
@@ -505,18 +513,19 @@ def create_pricing_export_csv(pricing_folder):
     ]
 
     if st.session_state.proposal_type == "Synergent Email Platform Proposal":
-        tier_cost, tier_name = calculate_emp_tier_cost(st.session_state.total_subscribers)
+        emp = emp_pricing_details(st.session_state.total_subscribers)
+        tier_cost = emp.get("tier_cost")
         rows.extend([
             ["EMP PRICING", ""],
             ["Total Subscribers", st.session_state.total_subscribers],
-            ["Tier", tier_name],
+            ["Tier", emp.get("tier_name")],
             ["Base Monthly Cost", tier_cost if tier_cost is not None else "Custom"],
-            ["Essentials Monthly Cost", tier_cost + 100 if tier_cost is not None else "Custom"],
-            ["Premium Monthly Cost", tier_cost + 200 if tier_cost is not None else "Custom"],
-            ["Elite Monthly Cost", tier_cost + 200 if tier_cost is not None else "Custom"],
-            ["Essentials Implementation", 5500],
-            ["Premium Implementation", 8000],
-            ["Elite Implementation", 10500],
+            ["Essentials Monthly Cost", emp.get("essentials_monthly", "Custom")],
+            ["Premium Monthly Cost", emp.get("premium_monthly", "Custom")],
+            ["Elite Monthly Cost", emp.get("elite_monthly", "Custom")],
+            ["Essentials Implementation", emp.get("essentials_implementation", pricing_value("emp_essentials_implementation", 5500))],
+            ["Premium Implementation", emp.get("premium_implementation", pricing_value("emp_premium_implementation", 8000))],
+            ["Elite Implementation", emp.get("elite_implementation", pricing_value("emp_elite_implementation", 10500))],
         ])
     else:
         if st.session_state.proposal_type == "Credit Card Campaign":
@@ -575,21 +584,24 @@ def create_pricing_export_csv(pricing_folder):
         rows.extend([
             [],
             ["PRICING INPUT DETAIL", "Included", "Quantity / Raw Cost", "Rate / Markup", "Calculated Cost"],
-            ["Creative Concept & Design", "Yes" if st.session_state.include_creative else "No", st.session_state.creative_hours, "$115/hour", costs["creative_cost"]],
-            ["Targeted Data Mining", "Yes" if st.session_state.include_data_mining else "No", st.session_state.data_mining_hours, "$200/hour", costs["data_mining_cost"]],
-            ["List Procurement", "Yes" if st.session_state.include_list_procurement else "No", st.session_state.list_procurement_raw, "35% markup", costs["list_procurement_cost"]],
-            ["Variable Print Production", "Yes" if st.session_state.include_print else "No", st.session_state.print_raw, "35% markup", costs["print_cost"]],
-            ["Email Development", "Yes" if st.session_state.include_email_labor else "No", st.session_state.email_hours, "$115/hour", costs["email_labor_cost"]],
-            ["Email Sends", "Yes" if st.session_state.include_email_sends else "No", st.session_state.email_send_count, "$100/send", costs["email_send_cost"]],
+            ["Creative Concept & Design", "Yes" if st.session_state.include_creative else "No", st.session_state.creative_hours, f"${pricing_value('creative_hourly_rate', 115):,.2f}/hour", costs["creative_cost"]],
+            ["Targeted Data Mining", "Yes" if st.session_state.include_data_mining else "No", st.session_state.data_mining_hours, f"${pricing_value('programming_hourly_rate', 200):,.2f}/hour", costs["data_mining_cost"]],
+            ["List Procurement", "Yes" if st.session_state.include_list_procurement else "No", st.session_state.list_procurement_raw, f"{pricing_value('list_markup_pct', 35):,.1f}% markup", costs["list_procurement_cost"]],
+            ["Variable Print Production", "Yes" if st.session_state.include_print else "No", st.session_state.print_raw, f"{pricing_value('print_markup_pct', 35):,.1f}% markup", costs["print_cost"]],
+            ["Email Development", "Yes" if st.session_state.include_email_labor else "No", st.session_state.email_hours, f"${pricing_value('email_development_hourly_rate', 115):,.2f}/hour", costs["email_labor_cost"]],
+            ["Email Sends", "Yes" if st.session_state.include_email_sends else "No", st.session_state.email_send_count, f"${pricing_value('email_send_fee', 100):,.2f}/send", costs["email_send_cost"]],
             [],
-            ["STRAIGHT COSTS", "Amount", "Included"],
+            ["FIXED COSTS", "Amount", "Included", "Behavior"],
         ])
 
-        for name, amount in STRAIGHT_COST_ITEMS.items():
-            rows.append([name, amount, "Yes" if st.session_state.get(f"cost_{name}", True) else "No"])
+        for item in get_fixed_cost_records():
+            name = item["label"]
+            amount = item["value"]
+            repeating_label = "Repeats per campaign" if item.get("is_repeating") else "One-time"
+            rows.append([name, amount, "Yes" if st.session_state.get(f"cost_{name}", True) else "No", repeating_label])
 
         rows.extend([
-            ["Straight Cost Total", costs["straight_cost_total"], ""],
+            ["Fixed Cost Total", costs["straight_cost_total"], ""],
             [],
             ["CUSTOM COSTS", "Amount"],
         ])
@@ -644,6 +656,91 @@ def get_credit_union_output_folder(credit_union):
 
     return base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder
 
+def get_active_pricing_schedule():
+    """Return the proposal's frozen pricing schedule, creating one for new proposals."""
+    snapshot = st.session_state.get("pricing_settings_snapshot")
+    if not snapshot:
+        snapshot = get_pricing_snapshot()
+        st.session_state.pricing_settings_snapshot = snapshot
+    return snapshot
+
+
+def pricing_value(key, default=0.0):
+    item = get_active_pricing_schedule().get(key, {})
+    try:
+        return float(item.get("value", default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def get_fixed_cost_records():
+    records = []
+    for key, item in get_active_pricing_schedule().items():
+        if item.get("category") == "Fixed Costs" and item.get("active", True):
+            row = dict(item)
+            row["key"] = key
+            row["value"] = float(row.get("value", 0) or 0)
+            row["is_repeating"] = bool(row.get("is_repeating", False))
+            records.append(row)
+    return sorted(records, key=lambda x: (x.get("sort_order", 0), x.get("label", "")))
+
+
+def get_fixed_cost_items():
+    return {item["label"]: item["value"] for item in get_fixed_cost_records()}
+
+
+def emp_pricing_details(total_subscribers):
+    tier_cost, tier_name = calculate_emp_tier_cost(total_subscribers)
+    if tier_cost is None:
+        return {"tier_cost": None, "tier_name": tier_name}
+    return {
+        "tier_cost": tier_cost,
+        "tier_name": tier_name,
+        "essentials_monthly": tier_cost + pricing_value("emp_essentials_addon", 100),
+        "premium_monthly": tier_cost + pricing_value("emp_premium_addon", 200),
+        "elite_monthly": tier_cost + pricing_value("emp_elite_addon", 200),
+        "essentials_implementation": pricing_value("emp_essentials_implementation", 5500),
+        "premium_implementation": pricing_value("emp_premium_implementation", 8000),
+        "elite_implementation": pricing_value("emp_elite_implementation", 10500),
+    }
+
+
+def build_pricing_audit_snapshot():
+    """Capture the exact rate schedule, inputs and calculated/final prices used at generation."""
+    snapshot = {
+        "pricing_schedule": deepcopy(get_active_pricing_schedule()),
+        "proposal_type": st.session_state.proposal_type,
+        "proposal_name": st.session_state.proposal_name,
+        "credit_union": st.session_state.credit_union,
+        "proposal_date": str(st.session_state.proposal_date),
+    }
+    if st.session_state.proposal_type == "Synergent Email Platform Proposal":
+        snapshot["emp"] = {
+            "total_subscribers": st.session_state.total_subscribers,
+            **emp_pricing_details(st.session_state.total_subscribers),
+        }
+    else:
+        costs = calculate_costs()
+        snapshot["inputs"] = {
+            "creative_hours": st.session_state.creative_hours,
+            "data_mining_hours": st.session_state.data_mining_hours,
+            "list_procurement_raw": st.session_state.list_procurement_raw,
+            "print_raw": st.session_state.print_raw,
+            "email_hours": st.session_state.email_hours,
+            "email_send_count": st.session_state.email_send_count,
+            "custom_costs": deepcopy(st.session_state.get("custom_costs", [])),
+        }
+        snapshot["calculated_costs"] = costs
+        snapshot["final_prices"] = {
+            "campaign_1": st.session_state.get("campaign_1_cost_override", money(costs["campaign_1_calc"])),
+            "campaign_2_total": st.session_state.get("campaign_2_cost_override", money(costs["campaign_2_calc"])),
+            "campaign_2_per": st.session_state.get("campaign_2_per_cost_override", money(costs["campaign_2_per_calc"])),
+            "campaign_4_total": st.session_state.get("campaign_4_cost_override", money(costs["campaign_4_calc"])),
+            "campaign_4_per": st.session_state.get("campaign_4_per_cost_override", money(costs["campaign_4_per_calc"])),
+        }
+    return snapshot
+
+
 def get_required_sections():
     if st.session_state.proposal_type == "Synergent Email Platform Proposal":
         return [
@@ -661,17 +758,17 @@ def get_required_sections():
 
 def calculate_emp_tier_cost(total_subscribers):
     if 2500 <= total_subscribers <= 4999:
-        return 59.54, "Tier 1"
+        return pricing_value("emp_tier_1_base", 59.54), "Tier 1"
     elif 5000 <= total_subscribers <= 9999:
-        return 108.14, "Tier 2"
+        return pricing_value("emp_tier_2_base", 108.14), "Tier 2"
     elif 10000 <= total_subscribers <= 14999:
-        return 156.74, "Tier 3"
+        return pricing_value("emp_tier_3_base", 156.74), "Tier 3"
     elif 15000 <= total_subscribers <= 24999:
-        return 241.79, "Tier 4"
+        return pricing_value("emp_tier_4_base", 241.79), "Tier 4"
     elif 25000 <= total_subscribers <= 49999:
-        return 363.29, "Tier 5"
+        return pricing_value("emp_tier_5_base", 363.29), "Tier 5"
     elif 50000 <= total_subscribers <= 74999:
-        return 545.54, "Tier 6"
+        return pricing_value("emp_tier_6_base", 545.54), "Tier 6"
     else:
         return None, "Custom"
 
@@ -749,6 +846,7 @@ def collect_saved_data():
         "campaign_4_cost_override",
         "campaign_4_per_cost_override",
         "copied_from_proposal_id",
+        "pricing_settings_snapshot",
     ]
 
     for key in keys_to_save:
@@ -783,7 +881,8 @@ def collect_saved_data():
     for i, _ in enumerate(DEFAULT_COMPONENTS, start=1):
         data[f"component_saved_{i}"] = st.session_state.get(f"component_saved_{i}", True)
 
-    for name in STRAIGHT_COST_ITEMS:
+    for item in get_fixed_cost_records():
+        name = item["label"]
         data[f"cost_{name}"] = st.session_state.get(f"cost_{name}", True)
 
     for sec in [
@@ -816,6 +915,10 @@ def canonical_msr_name(name):
 
 def load_saved_data(data):
     clear_completion_widget_state()
+    # Proposals saved before the Admin-pricing upgrade did not contain a rate schedule.
+    # Freeze them to the legacy rates rather than silently applying a future Admin change.
+    if not data.get("pricing_settings_snapshot"):
+        st.session_state.pricing_settings_snapshot = get_default_pricing_snapshot()
     for key, value in data.items():
         if key == "proposal_date" and value:
             value = date.fromisoformat(value)
@@ -1005,11 +1108,15 @@ def init_state():
         "signed_file_path": "",
         "signed_at": "",
         "pricing_export_path": "",
+        "pricing_settings_snapshot": None,
     }
 
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+    if not st.session_state.get("pricing_settings_snapshot"):
+        st.session_state.pricing_settings_snapshot = get_pricing_snapshot()
 
     for i, (_, _) in enumerate(DEFAULT_TARGET_OPTIONS, start=1):
         if f"target_include_{i}" not in st.session_state:
@@ -1021,7 +1128,8 @@ def init_state():
         if f"component_{i}" not in st.session_state:
             st.session_state[f"component_{i}"] = True
 
-    for name in STRAIGHT_COST_ITEMS:
+    for item in get_fixed_cost_records():
+        name = item["label"]
         if f"cost_{name}" not in st.session_state:
             st.session_state[f"cost_{name}"] = True
 
@@ -1060,6 +1168,8 @@ def duplicate_proposal(source_proposal_id):
         "signed_at": "",
         "pricing_export_path": "",
         "copied_from_proposal_id": source_proposal_id,
+        # A duplicate is a new proposal, so it starts on the current admin rate schedule.
+        "pricing_settings_snapshot": get_pricing_snapshot(),
     })
 
     for sec in ["Proposal Details", "Campaign Targets", "Conversion Metrics", "Campaign Components", "Cost Estimator", "EMP Details"]:
@@ -1156,88 +1266,71 @@ def status_color(status):
 
 
 def calculate_costs():
-    markup_rate = 1.35
+    creative_rate = pricing_value("creative_hourly_rate", 115)
+    programming_rate = pricing_value("programming_hourly_rate", 200)
+    email_rate = pricing_value("email_development_hourly_rate", 115)
+    list_markup_rate = 1 + (pricing_value("list_markup_pct", 35) / 100)
+    print_markup_rate = 1 + (pricing_value("print_markup_pct", 35) / 100)
+    email_send_rate = pricing_value("email_send_fee", 100)
+    four_campaign_discount = max(0.0, min(100.0, pricing_value("four_campaign_discount_pct", 10))) / 100
 
     creative_cost = (
-        st.session_state.creative_hours * 115
-        if st.session_state.include_creative
-        else 0
+        st.session_state.creative_hours * creative_rate
+        if st.session_state.include_creative else 0
     )
-
     data_mining_cost = (
-        st.session_state.data_mining_hours * 200
-        if st.session_state.include_data_mining
-        else 0
+        st.session_state.data_mining_hours * programming_rate
+        if st.session_state.include_data_mining else 0
     )
-
     list_procurement_cost = (
-        st.session_state.list_procurement_raw * markup_rate
-        if st.session_state.include_list_procurement
-        else 0
+        st.session_state.list_procurement_raw * list_markup_rate
+        if st.session_state.include_list_procurement else 0
     )
-
     print_cost = (
-        st.session_state.print_raw * markup_rate
-        if st.session_state.include_print
-        else 0
+        st.session_state.print_raw * print_markup_rate
+        if st.session_state.include_print else 0
     )
-
     email_labor_cost = (
-        st.session_state.email_hours * 115
-        if st.session_state.include_email_labor
-        else 0
+        st.session_state.email_hours * email_rate
+        if st.session_state.include_email_labor else 0
     )
-
     email_send_cost = (
-        st.session_state.email_send_count * 100
-        if st.session_state.include_email_sends
-        else 0
+        st.session_state.email_send_count * email_send_rate
+        if st.session_state.include_email_sends else 0
     )
 
     straight_cost_total = 0
+    repeating_fixed_cost_total = 0
     selected_straight_costs = []
-
-    for name, cost in STRAIGHT_COST_ITEMS.items():
+    for item in get_fixed_cost_records():
+        name = item["label"]
+        cost = float(item["value"])
         if st.session_state.get(f"cost_{name}", True):
             straight_cost_total += cost
             selected_straight_costs.append((name, cost))
+            if item.get("is_repeating", False):
+                repeating_fixed_cost_total += cost
 
     custom_costs_total = 0
-
     for item in st.session_state.get("custom_costs", []):
         if item.get("name", "").strip() and item.get("amount", 0) > 0:
             custom_costs_total += item["amount"]
 
     estimated_cost_total = (
-        creative_cost
-        + data_mining_cost
-        + list_procurement_cost
-        + print_cost
-        + email_labor_cost
-        + email_send_cost
-        + straight_cost_total
-        + custom_costs_total
-    )
-
-    ach_program_fee = (
-        2500
-        if any(name == "ACH Program Fee" for name, _ in selected_straight_costs)
-        else 0
+        creative_cost + data_mining_cost + list_procurement_cost + print_cost +
+        email_labor_cost + email_send_cost + straight_cost_total + custom_costs_total
     )
 
     repeating_cost_total = (
-        print_cost
-        + list_procurement_cost
-        + email_send_cost
-        + ach_program_fee
+        print_cost + list_procurement_cost + email_send_cost + repeating_fixed_cost_total
     )
-
     one_time_cost_total = estimated_cost_total - repeating_cost_total
 
     campaign_1_calc = estimated_cost_total
     campaign_2_calc = one_time_cost_total + (repeating_cost_total * 2)
     campaign_2_per_calc = campaign_2_calc / 2
-    campaign_4_calc = (one_time_cost_total + (repeating_cost_total * 4)) * 0.90
+    campaign_4_pre_discount = one_time_cost_total + (repeating_cost_total * 4)
+    campaign_4_calc = campaign_4_pre_discount * (1 - four_campaign_discount)
     campaign_4_per_calc = campaign_4_calc / 4
 
     return {
@@ -1248,6 +1341,7 @@ def calculate_costs():
         "email_labor_cost": email_labor_cost,
         "email_send_cost": email_send_cost,
         "straight_cost_total": straight_cost_total,
+        "repeating_fixed_cost_total": repeating_fixed_cost_total,
         "custom_costs_total": custom_costs_total,
         "estimated_cost_total": estimated_cost_total,
         "one_time_cost_total": one_time_cost_total,
@@ -1294,19 +1388,29 @@ with st.sidebar:
 
     st.markdown("---")
 
-    nav_col1, nav_col2 = st.columns(2)
-    with nav_col1:
+    is_admin_user = st.session_state.current_user in ADMIN_USERS
+    nav_cols = st.columns(3 if is_admin_user else 2)
+    with nav_cols[0]:
         if st.button("📁 Library", key="nav_library", use_container_width=True):
             st.session_state.active_section = "Proposal Library"
             st.rerun()
-    with nav_col2:
+    with nav_cols[1]:
         if st.button("➕ New", key="nav_new_proposal", use_container_width=True):
             if st.session_state.get("current_proposal_id"):
                 unlock_proposal(st.session_state.current_proposal_id, st.session_state.current_user)
             reset_proposal_state()
             st.rerun()
+    if is_admin_user:
+        with nav_cols[2]:
+            if st.button("⚙️ Admin", key="nav_admin", use_container_width=True):
+                if st.session_state.get("current_proposal_id"):
+                    auto_save_proposal()
+                    unlock_proposal(st.session_state.current_proposal_id, st.session_state.current_user)
+                    st.session_state.current_proposal_id = None
+                st.session_state.active_section = "Admin"
+                st.rerun()
 
-    if st.session_state.active_section != "Proposal Library":
+    if st.session_state.active_section not in ("Proposal Library", "Admin"):
         proposal_id = st.session_state.get("current_proposal_id")
         active = st.session_state.active_section
         required_sections = get_required_sections()
@@ -1443,9 +1547,188 @@ estimated_first_year_interest = calculate_first_year_interest(
 costs = calculate_costs()
 
 # ============================================================
+# Admin
+# ============================================================
+if section == "Admin":
+    st.subheader("Admin · Pricing & Configuration")
+
+    if st.session_state.current_user not in ADMIN_USERS:
+        st.error("Your selected user is not configured for Admin access.")
+        st.stop()
+
+    st.info(
+        "Pricing changes apply to NEW proposals only. Every proposal freezes the rate schedule "
+        "it started with, so changing a rate here will not recalculate an existing proposal."
+    )
+    st.caption(
+        "During this development phase, Admin visibility is based on the user selected in the sidebar. "
+        "When the app moves internally, this should be tied to authenticated Synergent user accounts."
+    )
+
+    pricing_tab, history_tab, storage_tab = st.tabs(["Pricing Settings", "Pricing History", "Storage Status"])
+
+    with pricing_tab:
+        current_settings = get_pricing_settings(include_inactive=True)
+        categories = []
+        for item in current_settings:
+            if item["category"] not in categories:
+                categories.append(item["category"])
+
+        with st.form("admin_pricing_form"):
+            edited_values = {}
+            edited_repeating = {}
+            edited_active = {}
+
+            for category in categories:
+                st.markdown(f"### {category}")
+                category_items = [x for x in current_settings if x["category"] == category]
+
+                for item in category_items:
+                    key = item["key"]
+                    label = item["label"]
+                    value_type = item.get("value_type", "currency")
+                    unit = item.get("unit", "")
+
+                    if category == "Fixed Costs":
+                        c1, c2, c3 = st.columns([0.58, 0.22, 0.20])
+                    else:
+                        c1, c2 = st.columns([0.72, 0.28])
+
+                    with c1:
+                        label_suffix = f" · {unit}" if unit else ""
+                        st.markdown(f"**{label}**{label_suffix}")
+                        if item.get("description"):
+                            st.caption(item["description"])
+
+                    with c2:
+                        step = 0.5 if value_type == "percent" else 1.0
+                        edited_values[key] = st.number_input(
+                            f"Value · {label}",
+                            min_value=0.0,
+                            value=float(item["value"]),
+                            step=step,
+                            key=f"admin_value_{key}",
+                            label_visibility="collapsed",
+                        )
+
+                    if category == "Fixed Costs":
+                        with c3:
+                            edited_repeating[key] = st.checkbox(
+                                "Repeat / campaign",
+                                value=bool(item.get("is_repeating", False)),
+                                key=f"admin_repeat_{key}",
+                            )
+                            edited_active[key] = st.checkbox(
+                                "Active",
+                                value=bool(item.get("active", True)),
+                                key=f"admin_active_{key}",
+                            )
+                    else:
+                        edited_repeating[key] = bool(item.get("is_repeating", False))
+                        edited_active[key] = bool(item.get("active", True))
+
+                st.markdown("---")
+
+            save_pricing_changes = st.form_submit_button("Save Pricing Changes", type="primary")
+
+        if save_pricing_changes:
+            changes = 0
+            for item in current_settings:
+                key = item["key"]
+                if update_pricing_setting(
+                    key,
+                    edited_values[key],
+                    st.session_state.current_user,
+                    is_repeating=edited_repeating[key],
+                    active=edited_active[key],
+                ):
+                    changes += 1
+            if changes:
+                st.success(f"Saved {changes} pricing change{'s' if changes != 1 else ''}. New proposals will use the updated schedule.")
+            else:
+                st.info("No pricing values changed.")
+            st.rerun()
+
+        st.markdown("### Add a Fixed Cost")
+        st.caption("New active fixed costs automatically appear in the Cost Estimator for new proposals.")
+        with st.form("add_fixed_cost_form", clear_on_submit=True):
+            add1, add2, add3 = st.columns([0.55, 0.25, 0.20])
+            with add1:
+                new_fixed_label = st.text_input("Cost name", placeholder="Example: Custom Landing Page Setup")
+            with add2:
+                new_fixed_value = st.number_input("Amount", min_value=0.0, value=0.0, step=25.0)
+            with add3:
+                new_fixed_repeating = st.checkbox("Repeats per campaign")
+            add_fixed_clicked = st.form_submit_button("Add Fixed Cost")
+
+        if add_fixed_clicked:
+            if not new_fixed_label.strip():
+                st.error("Enter a name for the fixed cost.")
+            elif new_fixed_value <= 0:
+                st.error("Enter an amount greater than $0.")
+            else:
+                add_fixed_cost(new_fixed_label, new_fixed_value, st.session_state.current_user, new_fixed_repeating)
+                st.success(f"Added {new_fixed_label.strip()} to the current pricing schedule.")
+                st.rerun()
+
+    with history_tab:
+        st.markdown("### Recent Pricing Changes")
+        history = get_pricing_history(200)
+        settings_by_key = {x["key"]: x for x in get_pricing_settings(include_inactive=True)}
+        if not history:
+            st.info("No pricing changes have been recorded yet.")
+        else:
+            for row in history:
+                setting = settings_by_key.get(row.get("setting_key"), {})
+                label = setting.get("label", row.get("setting_key", "Pricing Setting"))
+                old_value = float(row.get("old_value", 0) or 0)
+                new_value = float(row.get("new_value", 0) or 0)
+                unit = setting.get("unit", "")
+                if setting.get("value_type") == "percent":
+                    change_text = f"{old_value:,.1f}% → {new_value:,.1f}%"
+                else:
+                    change_text = f"${old_value:,.2f} → ${new_value:,.2f}"
+                metadata_changes = []
+                if row.get("old_is_repeating") is not None and row.get("new_is_repeating") is not None:
+                    if bool(row.get("old_is_repeating")) != bool(row.get("new_is_repeating")):
+                        metadata_changes.append(
+                            "repeat per campaign ON" if bool(row.get("new_is_repeating")) else "repeat per campaign OFF"
+                        )
+                if row.get("old_active") is not None and row.get("new_active") is not None:
+                    if bool(row.get("old_active")) != bool(row.get("new_active")):
+                        metadata_changes.append("activated" if bool(row.get("new_active")) else "deactivated")
+
+                st.markdown(f"**{label}** · {change_text}")
+                detail = f"Changed {row.get('changed_at', '')} by {row.get('changed_by', '')}{' · ' + unit if unit else ''}"
+                if metadata_changes:
+                    detail += " · " + ", ".join(metadata_changes)
+                st.caption(detail)
+                st.markdown("---")
+
+    with storage_tab:
+        db_status = get_backend_status()
+        file_status = get_storage_status()
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Proposal Database", db_status["data_mode"])
+            st.caption(db_status["database_location"])
+        with c2:
+            st.metric("Proposal Files", file_status["file_mode"])
+            if file_status.get("bucket"):
+                st.caption(f"Private bucket: {file_status['bucket']}")
+
+        if db_status["data_mode"] == "Local SQLite":
+            st.warning(
+                "Cloud persistence is not connected yet. The app is still using its local SQLite database "
+                "and local generated files. Follow CLOUD_SETUP.md when you're ready to connect Supabase."
+            )
+        else:
+            st.success("Cloud persistence is enabled. Proposal records and pricing settings are using Supabase.")
+
+# ============================================================
 # Proposal Library
 # ============================================================
-if section == "Proposal Library":
+elif section == "Proposal Library":
     st.subheader("Proposal Library")
 
     col1, col2, col3 = st.columns([0.50, 0.25, 0.25])
@@ -1631,62 +1914,58 @@ if section == "Proposal Library":
                 dl1, dl2, dl3, dl4 = st.columns(4)
             
                 with dl1:
-                    if file_path and os.path.exists(file_path):
-                        with open(file_path, "rb") as file:
-                            st.download_button(
-                                "📄",
-                                data=file,
-                                file_name=os.path.basename(file_path),
-                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                key=f"draft_{proposal_id}",
-                                help="Download Draft",
-                                use_container_width=True,
-                            )
+                    if file_path and stored_file_exists(file_path):
+                        st.download_button(
+                            "📄",
+                            data=read_bytes(file_path),
+                            file_name=display_name(file_path),
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            key=f"draft_{proposal_id}",
+                            help="Download Draft",
+                            use_container_width=True,
+                        )
                     else:
                         st.button("📄", key=f"draft_missing_{proposal_id}", disabled=True, help="Draft not generated yet", use_container_width=True)
 
                 with dl2:
-                    if sent_file_path and os.path.exists(sent_file_path):
-                        with open(sent_file_path, "rb") as file:
-                            st.download_button(
-                                "📤",
-                                data=file,
-                                file_name=os.path.basename(sent_file_path),
-                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                key=f"sent_{proposal_id}",
-                                help="Download Sent Proposal",
-                                use_container_width=True,
-                            )
+                    if sent_file_path and stored_file_exists(sent_file_path):
+                        st.download_button(
+                            "📤",
+                            data=read_bytes(sent_file_path),
+                            file_name=display_name(sent_file_path),
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            key=f"sent_{proposal_id}",
+                            help="Download Sent Proposal",
+                            use_container_width=True,
+                        )
                     else:
                         st.button("📤", key=f"sent_missing_{proposal_id}", disabled=True, help="No sent version yet", use_container_width=True)
             
                 with dl3:
-                    if signed_file_path and os.path.exists(signed_file_path):
-                        with open(signed_file_path, "rb") as file:
-                            st.download_button(
-                                "✅",
-                                data=file,
-                                file_name=os.path.basename(signed_file_path),
-                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                key=f"signed_{proposal_id}",
-                                help="Download Signed Proposal",
-                                use_container_width=True,
-                            )
+                    if signed_file_path and stored_file_exists(signed_file_path):
+                        st.download_button(
+                            "✅",
+                            data=read_bytes(signed_file_path),
+                            file_name=display_name(signed_file_path),
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            key=f"signed_{proposal_id}",
+                            help="Download Signed Proposal",
+                            use_container_width=True,
+                        )
                     else:
                         st.button("✅", key=f"signed_missing_{proposal_id}", disabled=True, help="No signed version yet", use_container_width=True)
             
                 with dl4:
-                    if pricing_export_path and os.path.exists(pricing_export_path):
-                        with open(pricing_export_path, "rb") as file:
-                            st.download_button(
-                                "💲",
-                                data=file,
-                                file_name=os.path.basename(pricing_export_path),
-                                mime="text/csv",
-                                key=f"pricing_{proposal_id}",
-                                help="Download Pricing Export",
-                                use_container_width=True,
-                            )
+                    if pricing_export_path and stored_file_exists(pricing_export_path):
+                        st.download_button(
+                            "💲",
+                            data=read_bytes(pricing_export_path),
+                            file_name=display_name(pricing_export_path),
+                            mime="text/csv",
+                            key=f"pricing_{proposal_id}",
+                            help="Download Pricing Export",
+                            use_container_width=True,
+                        )
                     else:
                         st.button("💲", key=f"pricing_missing_{proposal_id}", disabled=True, help="Pricing export not generated yet", use_container_width=True)
 
@@ -2267,7 +2546,7 @@ elif section == "Cost Estimator":
             value=st.session_state.creative_hours,
             step=0.5,
         )
-        st.caption("Estimated at $115/hour")
+        st.caption(f"Estimated at ${pricing_value('creative_hourly_rate', 115):,.2f}/hour")
 
     with col2:
         st.session_state.include_data_mining = st.checkbox(
@@ -2280,10 +2559,10 @@ elif section == "Cost Estimator":
             value=st.session_state.data_mining_hours,
             step=0.5,
         )
-        st.caption("Estimated at $200/hour")
+        st.caption(f"Estimated at ${pricing_value('programming_hourly_rate', 200):,.2f}/hour")
 
     st.markdown("### Marked-Up Cost Items")
-    st.caption("These costs are marked up by 35%.")
+    st.caption(f"List markup: {pricing_value('list_markup_pct', 35):,.1f}% · Print markup: {pricing_value('print_markup_pct', 35):,.1f}%")
 
     col1, col2 = st.columns(2)
 
@@ -2326,7 +2605,7 @@ elif section == "Cost Estimator":
             value=st.session_state.email_hours,
             step=0.5,
         )
-        st.caption("Estimated at $115/hour")
+        st.caption(f"Estimated at ${pricing_value('email_development_hourly_rate', 115):,.2f}/hour")
 
     with col2:
         st.session_state.include_email_sends = st.checkbox(
@@ -2339,13 +2618,16 @@ elif section == "Cost Estimator":
             value=st.session_state.email_send_count,
             step=1,
         )
-        st.caption("Charged at $100 per email send.")
+        st.caption(f"Charged at ${pricing_value('email_send_fee', 100):,.2f} per email send.")
 
-    st.markdown("### Straight Cost Items")
+    st.markdown("### Fixed Cost Items")
 
-    for name, cost in STRAIGHT_COST_ITEMS.items():
+    for item in get_fixed_cost_records():
+        name = item["label"]
+        cost = item["value"]
+        repeat_note = " · repeats per campaign" if item.get("is_repeating") else ""
         st.checkbox(
-            f"{name} — {money(cost)}",
+            f"{name} — {money(cost)}{repeat_note}",
             key=f"cost_{name}",
         )
 
@@ -2397,13 +2679,13 @@ elif section == "Cost Estimator":
         st.markdown("#### Marked-Up Costs")
         st.write(f"List Procurement: {money(costs['list_procurement_cost'])}")
         st.write(f"Variable Print Production: {money(costs['print_cost'])}")
-        st.caption("List Procurement and Variable Print Production include a 35% markup.")
+        st.caption(f"List Procurement includes a {pricing_value('list_markup_pct', 35):,.1f}% markup; Variable Print includes a {pricing_value('print_markup_pct', 35):,.1f}% markup.")
 
         st.markdown("#### Email Send Costs")
         st.write(f"Email Sends: {money(costs['email_send_cost'])}")
 
-        st.markdown("#### Straight Costs")
-        st.write(f"Selected straight cost items total: {money(costs['straight_cost_total'])}")
+        st.markdown("#### Fixed Costs")
+        st.write(f"Selected fixed cost items total: {money(costs['straight_cost_total'])}")
 
         st.markdown("#### Custom Costs")
         st.write(f"Custom costs total: {money(costs['custom_costs_total'])}")
@@ -2414,9 +2696,9 @@ elif section == "Cost Estimator":
         st.write(f"Total estimated one-campaign cost: {money(costs['campaign_1_calc'])}")
 
         st.caption(
-        "For 2+ campaign pricing, only Variable Print Production, Email Sends, "
-        "List Procurement, and ACH Program Fee repeat. Four-campaign pricing applies a 10% discount."
-    )
+            "For 2+ campaign pricing, Variable Print Production, List Procurement, Email Sends, "
+            f"and fixed costs marked as repeating recur per campaign. Four-campaign pricing applies a {pricing_value('four_campaign_discount_pct', 10):,.1f}% discount."
+        )
 
     col1, col2, col3 = st.columns(3)
 
@@ -2473,15 +2755,16 @@ elif section == "EMP Details":
     if tier_cost is None:
         st.warning("Subscriber count requires custom pricing.")
     else:
-        essentials_cost = tier_cost + 100
-        premium_cost = tier_cost + 200
-        elite_cost = tier_cost + 200
-
+        emp = emp_pricing_details(st.session_state.total_subscribers)
         st.write(f"Tier: {tier_name}")
         st.write(f"Base: ${tier_cost:,.2f}")
-        st.write(f"Essentials: ${essentials_cost:,.2f}")
-        st.write(f"Premium: ${premium_cost:,.2f}")
-        st.write(f"Elite: ${elite_cost:,.2f}")
+        st.write(f"Essentials: ${emp['essentials_monthly']:,.2f}")
+        st.write(f"Premium: ${emp['premium_monthly']:,.2f}")
+        st.write(f"Elite: ${emp['elite_monthly']:,.2f}")
+        st.caption(
+            f"Implementation: Essentials {money(emp['essentials_implementation'])} · "
+            f"Premium {money(emp['premium_implementation'])} · Elite {money(emp['elite_implementation'])}"
+        )
 
     
     auto_save_proposal()
@@ -2621,12 +2904,14 @@ elif section == "Generate Proposal":
         if tier_cost is None:
             st.write("Monthly Pricing: Custom pricing required")
         else:
+            emp = emp_pricing_details(st.session_state.total_subscribers)
             st.write(f"Base Monthly Cost: {money(tier_cost)}")
-            st.write(f"Essentials Monthly Cost: {money(tier_cost + 100)}")
-            st.write(f"Premium Monthly Cost: {money(tier_cost + 200)}")
-            st.write(f"Elite Monthly Cost: {money(tier_cost + 200)}")
+            st.write(f"Essentials Monthly Cost: {money(emp['essentials_monthly'])}")
+            st.write(f"Premium Monthly Cost: {money(emp['premium_monthly'])}")
+            st.write(f"Elite Monthly Cost: {money(emp['elite_monthly'])}")
             st.caption(
-                "Implementation: Essentials $5,500 · Premium $8,000 · Elite $10,500"
+                f"Implementation: Essentials {money(emp['essentials_implementation'])} · "
+                f"Premium {money(emp['premium_implementation'])} · Elite {money(emp['elite_implementation'])}"
             )
     else:
         st.write(f"Total Targets: {total_targets:,}")
@@ -2672,7 +2957,7 @@ elif section == "Generate Proposal":
        if st.session_state.get("file_path"):
         st.info(
             f"Current generated proposal:\n"
-            f"{os.path.basename(st.session_state.file_path)}"
+            f"{display_name(st.session_state.file_path)}"
         )
        if generate_clicked:
            emp_tier_cost, _ = calculate_emp_tier_cost(st.session_state.total_subscribers) if is_emp_proposal else (0, "")
@@ -2825,12 +3110,15 @@ elif section == "Generate Proposal":
                import os
                from datetime import datetime
                
-               date_str = datetime.today().strftime("%Y%m%d")
+               now_for_file = datetime.today()
+               date_str = now_for_file.strftime("%Y%m%d")
+               version_str = now_for_file.strftime("%H%M%S")
                
                credit_union_clean = st.session_state.credit_union
                proposal_name_clean = st.session_state.proposal_name
                
-               file_name = f"{date_str} {credit_union_clean} {proposal_name_clean}.pptx"
+               # Keep every generated version instead of overwriting another generation from the same day.
+               file_name = f"{date_str} {credit_union_clean} {proposal_name_clean} v{version_str}.pptx"
                
                base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
                    st.session_state.credit_union
@@ -2860,17 +3148,24 @@ elif section == "Generate Proposal":
                        st.error("This subscriber count requires custom pricing.")
                        st.stop()
    
+                   emp = emp_pricing_details(st.session_state.total_subscribers)
                    gp.proposal_data["{{total_subscribers}}"] = f"{st.session_state.total_subscribers:,}"
                    gp.proposal_data["{{tier_cost}}"] = f"${tier_cost:,.2f}"
-                   gp.proposal_data["{{essentials_cost}}"] = f"${tier_cost + 100:,.2f}"
-                   gp.proposal_data["{{premium_cost}}"] = f"${tier_cost + 200:,.2f}"
-                   gp.proposal_data["{{elite_cost}}"] = f"${tier_cost + 200:,.2f}"
+                   gp.proposal_data["{{essentials_cost}}"] = f"${emp['essentials_monthly']:,.2f}"
+                   gp.proposal_data["{{premium_cost}}"] = f"${emp['premium_monthly']:,.2f}"
+                   gp.proposal_data["{{elite_cost}}"] = f"${emp['elite_monthly']:,.2f}"
                    gp.proposal_data["{{emp_tier_number}}"] = tier_name.replace("Tier ", "")
                
                gp.main(output_path=file_path)
 
+               # Persist the generated draft. In cloud mode the local file is only staging.
+               stored_draft_ref = store_file(
+                   file_path,
+                   make_object_path(st.session_state.credit_union, "Drafts", file_name),
+               )
+
                # Save the generated draft first so the pricing export can include a proposal ID.
-               st.session_state.file_path = file_path
+               st.session_state.file_path = stored_draft_ref
                saved_data = collect_saved_data()
                proposal_id = save_proposal(
                    st.session_state.get("current_proposal_id"),
@@ -2885,8 +3180,24 @@ elif section == "Generate Proposal":
                st.session_state.current_proposal_id = proposal_id
 
                # Pricing detail is a generation artifact, not a "mark sent" artifact.
-               pricing_export_path = create_pricing_export_csv(pricing_folder)
+               local_pricing_export_path = create_pricing_export_csv(pricing_folder)
+               pricing_export_path = store_file(
+                   local_pricing_export_path,
+                   make_object_path(
+                       st.session_state.credit_union,
+                       "Pricing Exports",
+                       os.path.basename(local_pricing_export_path),
+                   ),
+               )
                st.session_state.pricing_export_path = pricing_export_path
+
+               # Every generation gets an immutable pricing audit snapshot.
+               save_pricing_snapshot(
+                   proposal_id,
+                   build_pricing_audit_snapshot(),
+                   st.session_state.current_user,
+               )
+
                save_proposal(
                    proposal_id,
                    st.session_state.proposal_name,
@@ -2899,30 +3210,30 @@ elif section == "Generate Proposal":
                )
 
                st.success("Proposal and pricing detail generated successfully!")
-               st.caption(f"Saved to: {drafts_folder}")
+               if cloud_file_mode():
+                   st.caption("Saved to persistent cloud storage.")
+               else:
+                   st.caption(f"Saved to: {drafts_folder}")
 
        file_path = st.session_state.get("file_path")
-       if file_path and os.path.exists(file_path):
-          with open(file_path, "rb") as file:
-          
-              st.download_button(
-                  label="Download Generated Proposal",
-                  data=file,
-                  file_name=os.path.basename(file_path),
-                  mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                  key="download_generated_proposal"
-              )
+       if file_path and stored_file_exists(file_path):
+           st.download_button(
+               label="Download Generated Proposal",
+               data=read_bytes(file_path),
+               file_name=display_name(file_path),
+               mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+               key="download_generated_proposal"
+           )
 
        pricing_export_path = st.session_state.get("pricing_export_path")
-       if pricing_export_path and os.path.exists(pricing_export_path):
-           with open(pricing_export_path, "rb") as file:
-               st.download_button(
-                   label="Download Pricing Detail",
-                   data=file,
-                   file_name=os.path.basename(pricing_export_path),
-                   mime="text/csv",
-                   key="download_generated_pricing"
-               )
+       if pricing_export_path and stored_file_exists(pricing_export_path):
+           st.download_button(
+               label="Download Pricing Detail",
+               data=read_bytes(pricing_export_path),
+               file_name=display_name(pricing_export_path),
+               mime="text/csv",
+               key="download_generated_pricing"
+           )
 
     # -----------------------------
     # Sent Proposal Snapshot
@@ -2933,15 +3244,15 @@ elif section == "Generate Proposal":
            
            file_path = st.session_state.get("file_path")
            
-           if file_path and os.path.exists(file_path):
-               st.info(f"Current generated proposal: {os.path.basename(file_path)}")
+           if file_path and stored_file_exists(file_path):
+               st.info(f"Current generated proposal: {display_name(file_path)}")
            else:
                st.warning("Generate the proposal before marking it as sent.")
            
            if st.button("Mark Current Proposal as Sent to Credit Union"):
                file_path = st.session_state.get("file_path")
            
-               if not file_path or not os.path.exists(file_path):
+               if not file_path or not stored_file_exists(file_path):
                    st.error("Generate the proposal before marking it as sent.")
                else:
                    from datetime import datetime
@@ -2952,21 +3263,38 @@ elif section == "Generate Proposal":
            
                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
            
-                   original_name = os.path.basename(file_path)
+                   original_name = display_name(file_path)
                    sent_file_name = original_name.replace(
                        ".pptx",
                        f" SENT {timestamp}.pptx"
                    )
-           
-                   sent_file_path = os.path.join(sent_folder, sent_file_name)
-                   st.session_state.sent_file_path = sent_file_path
-           
-                   shutil.copy2(file_path, sent_file_path)
+
+                   if cloud_file_mode():
+                       sent_file_path = copy_stored_file(
+                           file_path,
+                           destination_object_path=make_object_path(
+                               st.session_state.credit_union, "Sent", sent_file_name
+                           ),
+                       )
+                   else:
+                       sent_local_path = os.path.join(sent_folder, sent_file_name)
+                       sent_file_path = copy_stored_file(
+                           file_path, destination_local_path=sent_local_path
+                       )
+
                    st.session_state.sent_file_path = sent_file_path
                    st.session_state.sent_at = timestamp
                    pricing_export_path = st.session_state.get("pricing_export_path")
-                   if not pricing_export_path or not os.path.exists(pricing_export_path):
-                       pricing_export_path = create_pricing_export_csv(pricing_folder)
+                   if not pricing_export_path or not stored_file_exists(pricing_export_path):
+                       local_pricing_export_path = create_pricing_export_csv(pricing_folder)
+                       pricing_export_path = store_file(
+                           local_pricing_export_path,
+                           make_object_path(
+                               st.session_state.credit_union,
+                               "Pricing Exports",
+                               os.path.basename(local_pricing_export_path),
+                           ),
+                       )
                        st.session_state.pricing_export_path = pricing_export_path
            
                    saved_data = collect_saved_data()
@@ -2996,24 +3324,22 @@ elif section == "Generate Proposal":
                    st.session_state.current_proposal_id = proposal_id
            
                    st.success(f"Sent snapshot saved: {sent_file_name}") 
-                   if os.path.exists(sent_file_path):
-                       with open(sent_file_path, "rb") as file:
-                           st.download_button(
-                              label="Download Sent Proposal",
-                              data=file,
-                              file_name=os.path.basename(sent_file_path),
-                              mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                              key="download_sent"
-                           )
-                   if pricing_export_path and os.path.exists(pricing_export_path):
-                       with open(pricing_export_path, "rb") as file:
-                           st.download_button(
-                              label="Download Pricing Export",
-                              data=file,
-                              file_name=os.path.basename(pricing_export_path),
-                              mime="text/csv",
-                              key="download_pricing"
-                           )
+                   if stored_file_exists(sent_file_path):
+                       st.download_button(
+                          label="Download Sent Proposal",
+                          data=read_bytes(sent_file_path),
+                          file_name=display_name(sent_file_path),
+                          mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                          key="download_sent"
+                       )
+                   if pricing_export_path and stored_file_exists(pricing_export_path):
+                       st.download_button(
+                          label="Download Pricing Export",
+                          data=read_bytes(pricing_export_path),
+                          file_name=display_name(pricing_export_path),
+                          mime="text/csv",
+                          key="download_pricing"
+                       )
 
     # -----------------------------
     # PDF Export
@@ -3024,19 +3350,19 @@ elif section == "Generate Proposal":
             st.markdown("### PDF Export")
             
             if st.button("Create PDF from Sent Proposal"):
-            
                 sent_file_path = st.session_state.get("sent_file_path")
-            
-                if not sent_file_path or not os.path.exists(sent_file_path):
+
+                if cloud_file_mode():
+                    st.warning(
+                        "PDF conversion uses desktop Microsoft PowerPoint and is not available on the "
+                        "Streamlit cloud host. It will be available again when this app moves to the internal Windows server."
+                    )
+                elif not sent_file_path or not stored_file_exists(sent_file_path):
                     st.error("Mark the proposal as sent first.")
-            
                 else:
                     pdf_path = convert_pptx_to_pdf(sent_file_path)
-            
                     st.session_state.sent_pdf_path = pdf_path
-            
                     st.success("PDF created successfully.")
-            
                     st.rerun()
             
             
@@ -3059,44 +3385,41 @@ elif section == "Generate Proposal":
             # Mark Sent Proposal as Signed
             # -----------------------------
             if st.button("Mark Sent Proposal as Signed"):
-        
-                base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
-                    st.session_state.credit_union
-                )
-            
-                sent_files = [
-                    os.path.join(sent_folder, f)
-                    for f in os.listdir(sent_folder)
-                    if f.lower().endswith(".pptx")
-                ]
-            
-                if not sent_files:
-                    st.error("No sent proposal snapshot found in the Sent folder.")
+                sent_file_path = st.session_state.get("sent_file_path")
+
+                if not sent_file_path or not stored_file_exists(sent_file_path):
+                    st.error("No sent proposal snapshot is available.")
                 else:
-                    # Get most recently created/modified sent proposal
-                    latest_sent_file = max(sent_files, key=os.path.getmtime)
-            
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-                    signed_file_name = os.path.basename(latest_sent_file).replace(
-                        ".pptx",
-                        f" SIGNED {timestamp}.pptx"
+                    base_folder, drafts_folder, sent_folder, signed_folder, pricing_folder = get_credit_union_output_folder(
+                        st.session_state.credit_union
                     )
-            
-                    signed_file_path = os.path.join(signed_folder, signed_file_name)
-        
-            
-                    shutil.copy2(latest_sent_file, signed_file_path)
-            
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    signed_file_name = display_name(sent_file_path).replace(
+                        ".pptx", f" SIGNED {timestamp}.pptx"
+                    )
+
+                    if cloud_file_mode():
+                        signed_file_path = copy_stored_file(
+                            sent_file_path,
+                            destination_object_path=make_object_path(
+                                st.session_state.credit_union, "Signed", signed_file_name
+                            ),
+                        )
+                    else:
+                        signed_local_path = os.path.join(signed_folder, signed_file_name)
+                        signed_file_path = copy_stored_file(
+                            sent_file_path, destination_local_path=signed_local_path
+                        )
+
                     st.session_state.proposal_status = "Signed"
                     st.session_state.signed_file_path = signed_file_path
                     st.session_state.signed_at = timestamp
-            
+
                     saved_data = collect_saved_data()
-                    saved_data["sent_file_path"] = latest_sent_file
+                    saved_data["sent_file_path"] = sent_file_path
                     saved_data["signed_file_path"] = signed_file_path
                     saved_data["signed_at"] = timestamp
-            
+
                     proposal_id = save_proposal(
                         st.session_state.get("current_proposal_id"),
                         st.session_state.proposal_name,
@@ -3107,18 +3430,15 @@ elif section == "Generate Proposal":
                         st.session_state.msr,
                         st.session_state.current_user
                     )
-            
                     st.session_state.current_proposal_id = proposal_id
-            
+
                     st.success(f"Signed proposal snapshot saved: {signed_file_name}")
-                    if os.path.exists(signed_file_path):
-                       with open(signed_file_path, "rb") as file:
-                        st.download_button(
-                            label="Download Signed Proposal",
-                            data=file,
-                            file_name=os.path.basename(signed_file_path),
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                            key="download_signed"
-                        )
+                    st.download_button(
+                        label="Download Signed Proposal",
+                        data=read_bytes(signed_file_path),
+                        file_name=display_name(signed_file_path),
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        key="download_signed"
+                    )
         else:
              st.info("Mark proposal as sent to unlock PDF export and signing.")  
