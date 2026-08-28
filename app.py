@@ -23,7 +23,7 @@ import csv
 from copy import deepcopy
 
 
-st.set_page_config(page_title="Marketing Proposal Generator", layout="wide")
+st.set_page_config(page_title="Marketing Proposal Generator", page_icon="swirl.png", layout="wide")
 
 try:
     initialize_database()
