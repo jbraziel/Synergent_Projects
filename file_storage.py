@@ -9,6 +9,8 @@ import mimetypes
 import os
 import shutil
 from pathlib import Path
+from functools import lru_cache
+from urllib.parse import quote
 
 from config import get_file_mode, get_setting
 
@@ -37,6 +39,7 @@ def _parse_ref(ref: str):
     return bucket, path
 
 
+@lru_cache(maxsize=1)
 def ensure_cloud_bucket():
     if not is_cloud_mode():
         return
@@ -117,6 +120,83 @@ def stored_file_exists(ref: str) -> bool:
         # file on every Proposal Library rerun simply to check its existence.
         return True
     return os.path.exists(ref)
+
+
+
+def get_signed_download_urls(refs, expires_in: int = 3600) -> dict[str, str]:
+    """Create time-limited browser download URLs for many private cloud files at once.
+
+    Proposal Library used to download every visible PPTX/PDF/CSV into the Streamlit
+    process just to render its download buttons. This batches URL signing instead, so
+    the actual file bytes move only when the user clicks a file button.
+    """
+    refs = [ref for ref in dict.fromkeys(refs or []) if ref]
+    if not refs:
+        return {}
+
+    # Local files still use Streamlit's normal download_button flow.
+    if not is_cloud_mode():
+        return {}
+
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for ref in refs:
+        bucket, path = _parse_ref(ref)
+        if bucket and path:
+            grouped.setdefault(bucket, []).append((ref, path))
+
+    result: dict[str, str] = {}
+    client = _client()
+
+    for bucket, items in grouped.items():
+        paths = [path for _, path in items]
+        proxy = client.storage.from_(bucket)
+
+        try:
+            response = proxy.create_signed_urls(paths, int(expires_in))
+            data = getattr(response, "data", response)
+            if isinstance(data, dict):
+                data = (
+                    data.get("data")
+                    or data.get("signedUrls")
+                    or data.get("signed_urls")
+                    or []
+                )
+            if not isinstance(data, list):
+                data = []
+        except Exception:
+            # Compatibility fallback for storage client versions without batch signing.
+            data = []
+            for path in paths:
+                one = proxy.create_signed_url(path, int(expires_in))
+                one_data = getattr(one, "data", one)
+                if isinstance(one_data, dict) and "data" in one_data and isinstance(one_data["data"], dict):
+                    one_data = one_data["data"]
+                data.append(one_data if isinstance(one_data, dict) else {"signedURL": one_data, "path": path})
+
+        by_path = {}
+        for index, item in enumerate(data):
+            if isinstance(item, str):
+                item = {"signedURL": item}
+            if not isinstance(item, dict):
+                continue
+            signed = (
+                item.get("signedURL")
+                or item.get("signedUrl")
+                or item.get("signed_url")
+                or item.get("url")
+            )
+            item_path = item.get("path") or (paths[index] if index < len(paths) else None)
+            if signed and item_path:
+                by_path[item_path] = signed
+
+        for ref, path in items:
+            signed = by_path.get(path)
+            if not signed:
+                continue
+            separator = "&" if "?" in signed else "?"
+            result[ref] = f"{signed}{separator}download={quote(Path(path).name)}"
+
+    return result
 
 
 def display_name(ref: str) -> str:

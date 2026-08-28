@@ -7,6 +7,8 @@ import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
+from functools import lru_cache
+from copy import deepcopy
 
 from config import get_data_mode
 
@@ -79,6 +81,7 @@ def _cloud_client():
     return get_supabase_client()
 
 
+@lru_cache(maxsize=1)
 def initialize_database():
     if is_cloud_mode():
         try:
@@ -304,6 +307,82 @@ def search_proposals(search_text="", status_filter="All", msr_filter="All"):
     return rows
 
 
+
+def search_proposal_library(search_text="", status_filter="All", msr_filter="All"):
+    """Return Proposal Library rows and their saved file references in one DB request.
+
+    This avoids the old N+1 pattern where the library first fetched proposal metadata and
+    then issued another Supabase request for every visible proposal just to discover its
+    Draft/Sent/Signed/Pricing file references.
+    """
+    if is_cloud_mode():
+        rows = (
+            _cloud_client()
+            .table("proposals")
+            .select(
+                "id,proposal_name,credit_union,proposal_type,status,updated_at,msr,"
+                "updated_by,locked_by,locked_at,saved_data_json"
+            )
+            .order("updated_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+    else:
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, proposal_name, credit_union, proposal_type, status, updated_at,
+                   msr, updated_by, locked_by, locked_at, saved_data_json
+            FROM proposals
+            ORDER BY updated_at DESC
+        """)
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+    text = search_text.strip().lower()
+    legacy = {"Shannan Heacock": "Shannan", "Erica Vachon": "Erica"}
+    allowed_msr = {msr_filter, legacy.get(msr_filter)} if msr_filter != "All" else None
+    filtered = []
+
+    for row in rows:
+        if text and not any(
+            text in str(row.get(k, "")).lower()
+            for k in ("proposal_name", "credit_union", "proposal_type", "msr")
+        ):
+            continue
+        if status_filter != "All" and row.get("status") != status_filter:
+            continue
+        if allowed_msr and row.get("msr") not in allowed_msr:
+            continue
+
+        saved_data = row.get("saved_data_json") or {}
+        if isinstance(saved_data, str):
+            try:
+                saved_data = json.loads(saved_data)
+            except (TypeError, json.JSONDecodeError):
+                saved_data = {}
+        if not isinstance(saved_data, dict):
+            saved_data = {}
+
+        filtered.append({
+            "id": row.get("id"),
+            "proposal_name": row.get("proposal_name"),
+            "credit_union": row.get("credit_union"),
+            "proposal_type": row.get("proposal_type"),
+            "status": row.get("status"),
+            "updated_at": row.get("updated_at"),
+            "msr": row.get("msr"),
+            "updated_by": row.get("updated_by"),
+            "locked_by": row.get("locked_by"),
+            "locked_at": row.get("locked_at"),
+            "saved_data": saved_data,
+        })
+
+    return filtered
+
+
 def load_proposal(proposal_id):
     if is_cloud_mode():
         rows = (_cloud_client().table("proposals").select("saved_data_json")
@@ -370,6 +449,7 @@ def unlock_proposal(proposal_id, user_name):
     conn.commit(); conn.close()
 
 
+@lru_cache(maxsize=2)
 def get_pricing_settings(include_inactive: bool = True):
     if is_cloud_mode():
         rows = (_cloud_client().table("pricing_settings").select("*")
@@ -392,12 +472,19 @@ def get_pricing_settings(include_inactive: bool = True):
 
 def get_pricing_snapshot():
     """Return a JSON-safe full pricing schedule for freezing into a proposal."""
-    return {item["key"]: item for item in get_pricing_settings(include_inactive=True)}
+    # Deep-copy cached settings so a proposal can never mutate the shared cache.
+    return {item["key"]: deepcopy(item) for item in get_pricing_settings(include_inactive=True)}
 
 
 def get_default_pricing_snapshot():
     """Legacy schedule used for proposals created before database-backed pricing existed."""
     return {item["key"]: dict(item) for item in DEFAULT_PRICING_SETTINGS}
+
+
+def clear_pricing_cache():
+    """Invalidate slow-changing pricing caches after an Admin update."""
+    get_pricing_settings.cache_clear()
+    get_pricing_history.cache_clear()
 
 
 def update_pricing_setting(setting_key, new_value, changed_by, is_repeating=None, active=None):
@@ -483,9 +570,11 @@ def add_fixed_cost(label, value, changed_by, is_repeating=False):
         """, (row["key"], row["category"], row["label"], row["value"], row["value_type"], row["unit"],
               row["description"], row["sort_order"], int(row["is_repeating"]), 1, now, changed_by))
         conn.commit(); conn.close()
+    clear_pricing_cache()
     return key
 
 
+@lru_cache(maxsize=8)
 def get_pricing_history(limit=100):
     if is_cloud_mode():
         return (_cloud_client().table("pricing_history").select("*")

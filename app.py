@@ -4,22 +4,24 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 import generate_proposal as gp
 from database import (
-    initialize_database, save_proposal, search_proposals, load_proposal, delete_proposal,
+    initialize_database, save_proposal, search_proposals, search_proposal_library, load_proposal, delete_proposal,
     update_proposal_status, lock_proposal, unlock_proposal, get_pricing_snapshot,
     get_pricing_settings, update_pricing_setting, add_fixed_cost, get_pricing_history,
     save_pricing_snapshot, get_backend_status, get_default_pricing_snapshot,
-    get_next_generation_version,
+    get_next_generation_version, clear_pricing_cache,
 )
 from config import get_admin_users
 from file_storage import (
     store_file, store_bytes, read_bytes, stored_file_exists, display_name,
-    copy_stored_file, make_object_path, get_storage_status, is_cloud_mode as cloud_file_mode,
+    copy_stored_file, make_object_path, get_storage_status, get_signed_download_urls,
+    is_cloud_mode as cloud_file_mode,
 )
 import os
 import json
 import re
 import shutil
 import csv
+import hashlib
 from copy import deepcopy
 
 
@@ -174,6 +176,32 @@ st.markdown(
     div[data-testid="stDownloadButton"] button:hover {
         background-color: #155a9c !important;
         color: white !important;
+    }
+
+    /* Cloud-mode file links use signed Supabase URLs so the app does not download
+       every file just to render the Proposal Library. Keep them visually identical
+       to the existing blue download buttons. */
+    div[data-testid="stLinkButton"] a {
+        height: 38px !important;
+        min-height: 38px !important;
+        width: 100% !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        font-size: 12px !important;
+        border: none !important;
+        background-color: #1f77d0 !important;
+        color: white !important;
+        padding: 0.15rem 0.35rem !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        text-decoration: none !important;
+    }
+
+    div[data-testid="stLinkButton"] a:hover {
+        background-color: #155a9c !important;
+        color: white !important;
+        text-decoration: none !important;
     }
 
     /* Keep unavailable file placeholders aligned without looking active. */
@@ -929,15 +957,64 @@ def calculate_emp_tier_cost(total_subscribers):
     else:
         return None, "Custom"
 
-def auto_save_proposal():
-    # Only auto-save after a proposal has been created/saved once
-    if not st.session_state.get("current_proposal_id"):
-        return
+def saved_data_fingerprint(saved_data):
+    """Stable fingerprint used to avoid redundant cloud autosaves on harmless reruns."""
+    payload = json.dumps(saved_data, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@st.cache_data(ttl=1200, show_spinner=False)
+def cached_library_download_urls(refs_tuple):
+    """Cache private signed URLs briefly so Library reruns do not keep hitting Storage."""
+    return get_signed_download_urls(list(refs_tuple), expires_in=3600)
+
+
+def render_stored_download(label, ref, mime, key, help_text=None, use_container_width=False):
+    """Render a stored-file download without preloading cloud file bytes."""
+    if not ref or not stored_file_exists(ref):
+        return False
+
+    if cloud_file_mode():
+        urls = cached_library_download_urls((ref,))
+        url = urls.get(ref)
+        if url:
+            st.link_button(
+                label,
+                url,
+                help=help_text,
+                use_container_width=use_container_width,
+            )
+            return True
+
+    st.download_button(
+        label=label,
+        data=read_bytes(ref),
+        file_name=display_name(ref),
+        mime=mime,
+        key=key,
+        help=help_text,
+        use_container_width=use_container_width,
+    )
+    return True
+
+
+def auto_save_proposal(force=False):
+    # Only auto-save after a proposal has been created/saved once.
+    proposal_id = st.session_state.get("current_proposal_id")
+    if not proposal_id:
+        return False
 
     saved_data = collect_saved_data()
+    fingerprint = saved_data_fingerprint(saved_data)
+    fingerprint_key = f"_last_saved_fingerprint_{proposal_id}"
+
+    # Streamlit reruns the whole script for many UI interactions. If proposal data did
+    # not actually change, skip the network write entirely.
+    if not force and st.session_state.get(fingerprint_key) == fingerprint:
+        return False
 
     proposal_id = save_proposal(
-        st.session_state.get("current_proposal_id"),
+        proposal_id,
         st.session_state.proposal_name,
         st.session_state.credit_union,
         st.session_state.proposal_type,
@@ -948,6 +1025,8 @@ def auto_save_proposal():
     )
 
     st.session_state.current_proposal_id = proposal_id
+    st.session_state[f"_last_saved_fingerprint_{proposal_id}"] = fingerprint
+    return True
 
 def collect_saved_data():
     data = {}
@@ -1882,6 +1961,9 @@ if section == "Admin":
                 ):
                     changes += 1
             if changes:
+                # All settings in the form share one cached pricing read. Clear it once
+                # after the batch rather than re-querying Supabase for every setting.
+                clear_pricing_cache()
                 st.success(f"Saved {changes} pricing change{'s' if changes != 1 else ''}. New proposals will use the updated schedule.")
             else:
                 st.info("No pricing values changed.")
@@ -1986,7 +2068,7 @@ elif section == "Proposal Library":
             ["All"] + MSR_OPTIONS
         )
 
-    results = search_proposals(search_text, status_filter, msr_filter)
+    results = search_proposal_library(search_text, status_filter, msr_filter)
 
     st.markdown("### Start New Proposal")
 
@@ -1999,6 +2081,22 @@ elif section == "Proposal Library":
     if not results:
         st.info("No saved proposals found.")
     else:
+        # One DB query above already includes each proposal's file references. In cloud
+        # mode, sign all visible private files in one batched Storage request and let the
+        # browser fetch a file only after the user clicks it.
+        library_file_refs = []
+        for row in results:
+            row_saved = row.get("saved_data") or {}
+            for file_key in ("file_path", "sent_file_path", "signed_file_path", "pricing_export_path"):
+                ref = row_saved.get(file_key)
+                if ref:
+                    library_file_refs.append(ref)
+
+        if cloud_file_mode() and library_file_refs:
+            library_download_urls = cached_library_download_urls(tuple(sorted(set(library_file_refs))))
+        else:
+            library_download_urls = {}
+
         st.markdown("### Saved Proposals")
 
         h1, h2, h3, h4, h5, h6, h7 = st.columns(
@@ -2015,7 +2113,19 @@ elif section == "Proposal Library":
         
         st.markdown("---")
 
-        for proposal_id, proposal_name, credit_union, proposal_type, status, updated_at, msr, updated_by, locked_by, locked_at in results:
+        for row in results:
+            proposal_id = row.get("id")
+            proposal_name = row.get("proposal_name")
+            credit_union = row.get("credit_union")
+            proposal_type = row.get("proposal_type")
+            status = row.get("status")
+            updated_at = row.get("updated_at")
+            msr = row.get("msr")
+            updated_by = row.get("updated_by")
+            locked_by = row.get("locked_by")
+            locked_at = row.get("locked_at")
+            saved_data = row.get("saved_data") or {}
+
             col1, col2, col3, col4, col5, col6, col7 = st.columns(
                 [0.23, 0.15, 0.11, 0.09, 0.14, 0.14, 0.14]
             )
@@ -2106,12 +2216,12 @@ elif section == "Proposal Library":
                         help="Edit proposal",
                         use_container_width=True,
                     ):
-                        saved_data = load_proposal(proposal_id)
                         if saved_data:
                             reset_proposal_state()
                             lock_proposal(proposal_id, st.session_state.current_user)
                             load_saved_data(saved_data)
                             st.session_state.current_proposal_id = proposal_id
+                            st.session_state[f"_last_saved_fingerprint_{proposal_id}"] = saved_data_fingerprint(collect_saved_data())
                             st.session_state.active_section = "Proposal Details"
                             st.rerun()
 
@@ -2143,75 +2253,78 @@ elif section == "Proposal Library":
                         )
 
             with col7:
-                saved_data = load_proposal(proposal_id)
-            
-                if isinstance(saved_data, str):
-                    saved_data = json.loads(saved_data)
-            
                 file_path = saved_data.get("file_path")
                 sent_file_path = saved_data.get("sent_file_path")
                 signed_file_path = saved_data.get("signed_file_path")
                 pricing_export_path = saved_data.get("pricing_export_path")
-            
+
                 dl1, dl2, dl3, dl4 = st.columns(4)
-            
+
                 with dl1:
                     if file_path and stored_file_exists(file_path):
-                        st.download_button(
-                            "📄",
-                            data=read_bytes(file_path),
-                            file_name=display_name(file_path),
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                            key=f"draft_{proposal_id}",
-                            help="Download Draft",
-                            use_container_width=True,
-                        )
+                        if cloud_file_mode() and library_download_urls.get(file_path):
+                            st.link_button(
+                                "📄", library_download_urls[file_path],
+                                help="Download Draft", use_container_width=True,
+                            )
+                        else:
+                            st.download_button(
+                                "📄", data=read_bytes(file_path), file_name=display_name(file_path),
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                key=f"draft_{proposal_id}", help="Download Draft", use_container_width=True,
+                            )
                     else:
                         st.button("📄", key=f"draft_missing_{proposal_id}", disabled=True, help="Draft not generated yet", use_container_width=True)
 
                 with dl2:
                     if sent_file_path and stored_file_exists(sent_file_path):
-                        st.download_button(
-                            "📤",
-                            data=read_bytes(sent_file_path),
-                            file_name=display_name(sent_file_path),
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                            key=f"sent_{proposal_id}",
-                            help="Download Sent Proposal",
-                            use_container_width=True,
-                        )
+                        if cloud_file_mode() and library_download_urls.get(sent_file_path):
+                            st.link_button(
+                                "📤", library_download_urls[sent_file_path],
+                                help="Download Sent Proposal", use_container_width=True,
+                            )
+                        else:
+                            st.download_button(
+                                "📤", data=read_bytes(sent_file_path), file_name=display_name(sent_file_path),
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                key=f"sent_{proposal_id}", help="Download Sent Proposal", use_container_width=True,
+                            )
                     else:
                         st.button("📤", key=f"sent_missing_{proposal_id}", disabled=True, help="No sent version yet", use_container_width=True)
-            
+
                 with dl3:
                     if signed_file_path and stored_file_exists(signed_file_path):
-                        st.download_button(
-                            "✅",
-                            data=read_bytes(signed_file_path),
-                            file_name=display_name(signed_file_path),
-                            mime=(
-                                "application/pdf"
-                                if display_name(signed_file_path).lower().endswith(".pdf")
-                                else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                            ),
-                            key=f"signed_{proposal_id}",
-                            help="Download Signed Proposal",
-                            use_container_width=True,
-                        )
+                        if cloud_file_mode() and library_download_urls.get(signed_file_path):
+                            st.link_button(
+                                "✅", library_download_urls[signed_file_path],
+                                help="Download Signed Proposal", use_container_width=True,
+                            )
+                        else:
+                            st.download_button(
+                                "✅", data=read_bytes(signed_file_path), file_name=display_name(signed_file_path),
+                                mime=(
+                                    "application/pdf"
+                                    if display_name(signed_file_path).lower().endswith(".pdf")
+                                    else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                                ),
+                                key=f"signed_{proposal_id}", help="Download Signed Proposal", use_container_width=True,
+                            )
                     else:
                         st.button("✅", key=f"signed_missing_{proposal_id}", disabled=True, help="No signed version yet", use_container_width=True)
-            
+
                 with dl4:
                     if pricing_export_path and stored_file_exists(pricing_export_path):
-                        st.download_button(
-                            "💲",
-                            data=read_bytes(pricing_export_path),
-                            file_name=display_name(pricing_export_path),
-                            mime="text/csv",
-                            key=f"pricing_{proposal_id}",
-                            help="Download Pricing Export",
-                            use_container_width=True,
-                        )
+                        if cloud_file_mode() and library_download_urls.get(pricing_export_path):
+                            st.link_button(
+                                "💲", library_download_urls[pricing_export_path],
+                                help="Download Pricing Export", use_container_width=True,
+                            )
+                        else:
+                            st.download_button(
+                                "💲", data=read_bytes(pricing_export_path), file_name=display_name(pricing_export_path),
+                                mime="text/csv", key=f"pricing_{proposal_id}",
+                                help="Download Pricing Export", use_container_width=True,
+                            )
                     else:
                         st.button("💲", key=f"pricing_missing_{proposal_id}", disabled=True, help="Pricing export not generated yet", use_container_width=True)
 
@@ -3470,22 +3583,20 @@ elif section == "Generate Proposal":
 
        file_path = st.session_state.get("file_path")
        if file_path and stored_file_exists(file_path):
-           st.download_button(
-               label="Download Generated Proposal",
-               data=read_bytes(file_path),
-               file_name=display_name(file_path),
-               mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-               key="download_generated_proposal"
+           render_stored_download(
+               "Download Generated Proposal",
+               file_path,
+               "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+               "download_generated_proposal",
            )
 
        pricing_export_path = st.session_state.get("pricing_export_path")
        if pricing_export_path and stored_file_exists(pricing_export_path):
-           st.download_button(
-               label="Download Pricing Detail",
-               data=read_bytes(pricing_export_path),
-               file_name=display_name(pricing_export_path),
-               mime="text/csv",
-               key="download_generated_pricing"
+           render_stored_download(
+               "Download Pricing Detail",
+               pricing_export_path,
+               "text/csv",
+               "download_generated_pricing",
            )
 
     # -----------------------------
@@ -3573,20 +3684,18 @@ elif section == "Generate Proposal":
            
                    st.success(f"Sent snapshot saved: {sent_file_name}") 
                    if stored_file_exists(sent_file_path):
-                       st.download_button(
-                          label="Download Sent Proposal",
-                          data=read_bytes(sent_file_path),
-                          file_name=display_name(sent_file_path),
-                          mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                          key="download_sent"
+                       render_stored_download(
+                           "Download Sent Proposal",
+                           sent_file_path,
+                           "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                           "download_sent",
                        )
                    if pricing_export_path and stored_file_exists(pricing_export_path):
-                       st.download_button(
-                          label="Download Pricing Export",
-                          data=read_bytes(pricing_export_path),
-                          file_name=display_name(pricing_export_path),
-                          mime="text/csv",
-                          key="download_pricing"
+                       render_stored_download(
+                           "Download Pricing Export",
+                           pricing_export_path,
+                           "text/csv",
+                           "download_pricing",
                        )
 
     # -----------------------------
@@ -3658,12 +3767,11 @@ elif section == "Generate Proposal":
                 if signed_meta:
                     st.caption(" ".join(signed_meta))
 
-                st.download_button(
-                    label="Download Signed PDF",
-                    data=read_bytes(signed_file_path),
-                    file_name=display_name(signed_file_path),
-                    mime="application/pdf",
-                    key="download_existing_signed_pdf",
+                render_stored_download(
+                    "Download Signed PDF",
+                    signed_file_path,
+                    "application/pdf",
+                    "download_existing_signed_pdf",
                 )
 
                 replace_signed = st.checkbox(
